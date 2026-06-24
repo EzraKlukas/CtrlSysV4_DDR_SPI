@@ -88,17 +88,7 @@ def plot_records(records: list[SampleRecord]) -> None:
         print("matplotlib is not installed; install it with: python -m pip install matplotlib")
         return
 
-    first_arrival = records[0].arrival_perf_ns
-    first_fpga = records[0].fpga_start_ticks
     x = [record.sequence for record in records]
-    arrival_ms = [
-        (record.arrival_perf_ns - first_arrival) / 1_000_000
-        for record in records
-    ]
-    fpga_ms = [
-        (record.fpga_start_ticks - first_fpga) * 1_000 / SAMPLE_CLOCK_HZ
-        for record in records
-    ]
     delta_ms = [
         0.0 if index == 0 else
         (records[index].arrival_perf_ns - records[index - 1].arrival_perf_ns)
@@ -106,20 +96,14 @@ def plot_records(records: list[SampleRecord]) -> None:
         for index in range(len(records))
     ]
 
-    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(11, 7))
-    axes[0].plot(x, arrival_ms, "o-", label="PC arrival")
-    axes[0].plot(x, fpga_ms, "s--", label="FPGA start")
-    axes[0].set_ylabel("elapsed time (ms)")
-    axes[0].grid(True, alpha=0.3)
-    axes[0].legend()
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.plot(x, delta_ms, "o-", color="tab:orange")
+    ax.set_xlabel("sample sequence")
+    ax.set_ylabel("PC inter-arrival (ms)")
+    ax.grid(True, alpha=0.3)
 
-    axes[1].plot(x, delta_ms, "o-", color="tab:orange")
-    axes[1].set_xlabel("sample sequence")
-    axes[1].set_ylabel("PC inter-arrival (ms)")
-    axes[1].grid(True, alpha=0.3)
-
-    for record, y_value in zip(records, arrival_ms):
-        axes[0].annotate(
+    for record, y_value in zip(records, delta_ms):
+        ax.annotate(
             str(record.fpga_start_ticks),
             (record.sequence, y_value),
             textcoords="offset points",
@@ -129,7 +113,7 @@ def plot_records(records: list[SampleRecord]) -> None:
             rotation=35,
         )
 
-    fig.suptitle("Red Pitaya DMA sample timing")
+    fig.suptitle("Red Pitaya DMA packet inter-arrival timing")
     fig.tight_layout()
     plt.show()
 
