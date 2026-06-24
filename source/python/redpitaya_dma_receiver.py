@@ -43,6 +43,25 @@ def recv_exact(sock: socket.socket, length: int) -> bytes:
     return b"".join(chunks)
 
 
+def set_tcp_quickack(sock: socket.socket) -> None:
+    quickack = getattr(socket, "TCP_QUICKACK", None)
+    if quickack is None:
+        return
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, quickack, 1)
+    except OSError:
+        pass
+
+
+def configure_low_latency_socket(sock: socket.socket) -> None:
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, 0x10)
+    except OSError:
+        pass
+    set_tcp_quickack(sock)
+
+
 def timestamp_text(epoch_ns: int) -> str:
     timestamp = dt.datetime.fromtimestamp(epoch_ns / 1_000_000_000).astimezone()
     return timestamp.isoformat(timespec="microseconds")
@@ -127,6 +146,8 @@ def main() -> int:
                         help="also print the 20 sensor bytes as hex")
     parser.add_argument("--plot", action="store_true",
                         help="plot packet arrival times after capture ends")
+    parser.add_argument("--quiet", action="store_true",
+                        help="record samples without printing each packet")
     args = parser.parse_args()
 
     packet_size = PACKET_STRUCT.size
@@ -137,10 +158,12 @@ def main() -> int:
 
     try:
         with socket.create_connection((args.host, args.port)) as sock:
+            configure_low_latency_socket(sock)
             print(f"connected to {args.host}:{args.port}, packet_size={packet_size}")
 
             while args.count == 0 or received < args.count:
                 payload = recv_exact(sock, packet_size)
+                set_tcp_quickack(sock)
                 arrival_epoch_ns = time.time_ns()
                 arrival_perf_ns = time.perf_counter_ns()
 
@@ -186,7 +209,8 @@ def main() -> int:
                 )
                 if args.raw_hex:
                     line += " sensor_hex=" + sensor_bytes_from_frame(frame).hex(" ")
-                print(line, flush=True)
+                if not args.quiet:
+                    print(line, flush=True)
 
                 received += 1
     except KeyboardInterrupt:

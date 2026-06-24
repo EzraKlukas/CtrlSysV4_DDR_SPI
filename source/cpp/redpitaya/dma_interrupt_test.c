@@ -4,6 +4,8 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +42,18 @@ static int parse_unsigned(const char *text, unsigned *value)
         return -1;
     *value = (unsigned)parsed;
     return 0;
+}
+
+static void configure_low_latency_socket(int fd)
+{
+    int value = 1;
+    int tos = IPTOS_LOWDELAY;
+
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)) != 0)
+        perror("setsockopt TCP_NODELAY");
+
+    if (setsockopt(fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) != 0)
+        perror("setsockopt IP_TOS");
 }
 
 static int open_tcp_server(unsigned port)
@@ -89,6 +103,7 @@ static int open_tcp_server(unsigned port)
         return -1;
     }
 
+    configure_low_latency_socket(client_fd);
     printf("TCP receiver connected.\n");
     return client_fd;
 }
