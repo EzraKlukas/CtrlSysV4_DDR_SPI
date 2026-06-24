@@ -1,0 +1,21 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Runtime device-tree overlay for exposing the CtrlSys AXI DMA S2MM
+ * completion interrupt through the existing Red Pitaya generic-uio node.
+ *
+ * Hardware requirement:
+ *   axi_dma_0/s2mm_introut -> processing_system7_0/IRQ_F2P[0]
+ *
+ * Build:
+ *   dtc -@ -I dts -O dtb dma_irq_uio_overlay.dts -o dma_irq_uio_overlay.dtbo
+ *
+ * Load with the matching bitstream:
+ *   fpgautil -b CtrlSysV4.bit.bin -o dma_irq_uio_overlay.dtbo
+ */
+
+&{/axi/api@40000000} {
+        interrupt-parent = <&intc>;
+        interrupts = <0x00 0x1d 0x04>;
+};
