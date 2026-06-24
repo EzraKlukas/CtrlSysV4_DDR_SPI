@@ -36,8 +36,8 @@ produces a warning but does not stop the test. The program then resets and
 wakes the device, disables its host I2C interface, and enables its
 accelerometer and gyroscope.
 The final six bytes of the 20-byte burst are external-sensor-data registers;
-they do not contain magnetometer measurements until the ICM-20948 auxiliary
-I2C master and its internal AK09916 magnetometer have also been configured.
+the program configures the ICM-20948 auxiliary I2C master to keep the internal
+AK09916 magnetometer's `HXL` through `HZH` registers in those bytes.
 
 To select another u-dma-buf device:
 
@@ -45,7 +45,24 @@ To select another u-dma-buf device:
 sudo ./single_sensor_test --udmabuf /dev/udmabuf1
 ```
 
-If u-dma-buf is unavailable, reserve the top 16 MiB of the 512 MiB DDR by
+If u-dma-buf is unavailable on a Red Pitaya image, first check the board's
+existing Deep Memory Mode reserved region:
+
+```sh
+monitor -r
+```
+
+For the default 32 MiB region this reports a start address of `0x1000000`.
+Use that address with `--phys`:
+
+```sh
+sudo ./single_sensor_test --phys 0x1000000
+```
+
+The program accepts a `--phys` address that is either outside `/proc/iomem`
+System RAM or inside the Red Pitaya `monitor -r` reserved memory range.
+
+As another bring-up option, reserve the top 16 MiB of the 512 MiB DDR by
 changing the kernel boot argument from `mem=512M` to `mem=496M`, then reboot.
 Confirm that Linux no longer owns that region:
 
@@ -61,7 +78,8 @@ The command line must contain `mem=496M`, and System RAM must end at
 sudo ./single_sensor_test --phys 0x1f000000
 ```
 
-The program refuses a `--phys` address that still overlaps a System RAM range.
+The program refuses a `--phys` address that still overlaps a System RAM range
+unless Red Pitaya's `monitor -r` reports that address as reserved.
 
 The program resets the core and DMA, arms one 36-byte S2MM transfer, performs
 one SPI burst read beginning at ICM-20948 register `0x2D`, stops acquisition,
