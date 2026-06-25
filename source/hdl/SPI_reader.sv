@@ -10,7 +10,7 @@ module SPI_reader #(
     parameter logic [6:0] REG_ADDR = 7'd45, // ICM accel_xout_h starts at address 45
     parameter integer DATA_BYTES = 20, // the number of data bytes to read per sensor
     parameter integer NUM_SENSORS = 1,
-    parameter integer SCLK_HALF_PERIOD_CYCLES = 25 // 1 MHz from a 50 MHz clk
+    parameter integer SCLK_HALF_PERIOD_CYCLES = 63 // Approximately 1 MHz from a 125 MHz clk
 )(
     input logic                         clk,
     input logic                         rst,
@@ -46,8 +46,7 @@ logic mosi_drive;
 // SPI timing
 logic spi_tick;
 logic tick_en;
-localparam integer TICK_COUNTER_WIDTH =
-    (SCLK_HALF_PERIOD_CYCLES > 1) ? $clog2(SCLK_HALF_PERIOD_CYCLES) : 1;
+localparam integer TICK_COUNTER_WIDTH = (SCLK_HALF_PERIOD_CYCLES > 1) ? $clog2(SCLK_HALF_PERIOD_CYCLES) : 1;
 logic [TICK_COUNTER_WIDTH-1:0] tickCounter;
 logic spi_clk_rising;
 logic spi_clk_falling;
