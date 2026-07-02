@@ -24,11 +24,21 @@ proc newest_file { files } {
 
 proc find_bitstream { project_dir } {
     set bit_files {}
+    set repo_root [file dirname $project_dir]
+    set build_bit [file normalize [file join $repo_root "build" "design_1_wrapper.bit"]]
+
+    if {[file exists $build_bit]} {
+        lappend bit_files $build_bit
+    }
 
     if {[llength [info commands get_runs]] > 0} {
-        set runs [get_runs -quiet impl_1]
+        if {[catch {get_runs -quiet impl_1} runs]} {
+            set runs {}
+        }
         if {[llength $runs] == 0} {
-            set runs [get_runs -quiet impl_*]
+            if {[catch {get_runs -quiet impl_*} runs]} {
+                set runs {}
+            }
         }
 
         foreach run $runs {
@@ -40,7 +50,9 @@ proc find_bitstream { project_dir } {
     }
 
     if {[llength $bit_files] == 0 && [llength [info commands current_project]] > 0} {
-        set project [current_project -quiet]
+        if {[catch {current_project -quiet} project]} {
+            set project ""
+        }
         if {$project ne ""} {
             set project_dir [get_property DIRECTORY $project]
             set bit_files [glob -nocomplain [file join $project_dir "*.runs" "impl_*" "*.bit"]]
@@ -86,7 +98,9 @@ set bit_dst  [file normalize [file join $work_dir $bit_name]]
 set bif_path [file normalize [file join $work_dir "${bit_base}.bif"]]
 set bin_path [file normalize [file join $work_dir "${bit_name}.bin"]]
 
-file copy -force $bit_src $bit_dst
+if {[file normalize $bit_src] ne $bit_dst} {
+    file copy -force $bit_src $bit_dst
+}
 file delete -force $bin_path
 
 set fp [open $bif_path w]

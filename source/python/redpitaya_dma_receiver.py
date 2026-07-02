@@ -362,9 +362,8 @@ def print_packet_trailer(data: bytes, frame_words: int) -> None:
 
 def find_plausible_trailer_offsets(data: bytes) -> list[int]:
     offsets: list[int] = []
-    search_start = max(0, PACKET_TRAILER_OFFSET - 2048)
-    search_end = min(len(data) - PACKET_TRAILER_BYTES + 1,
-                     PACKET_TRAILER_OFFSET + 2048)
+    search_start = 0
+    search_end = max(0, len(data) - PACKET_TRAILER_BYTES + 1)
 
     for offset in range(search_start, search_end):
         intan_frame_count = int.from_bytes(
@@ -376,6 +375,17 @@ def find_plausible_trailer_offsets(data: bytes) -> list[int]:
             and intan_frame_count <= INTAN_SAMPLING_RATIO
         ):
             offsets.append(offset)
+
+    return offsets
+
+
+def find_packet_magic_offsets(data: bytes) -> list[int]:
+    offsets: list[int] = []
+    offset = data.find(PACKET_MAGIC)
+
+    while offset >= 0:
+        offsets.append(offset)
+        offset = data.find(PACKET_MAGIC, offset + 1)
 
     return offsets
 
@@ -410,6 +420,7 @@ def print_packet_sanity(data: bytes, trailer: PacketTrailer) -> None:
             or trailer.intan_frame_count > trailer.max_intan_frame_count
         ):
             candidates = find_plausible_trailer_offsets(data)
+            magic_offsets = find_packet_magic_offsets(data)
             if candidates:
                 print(
                     f"  Sanity: expected trailer at offset "
@@ -417,6 +428,14 @@ def print_packet_sanity(data: bytes, trailer: PacketTrailer) -> None:
                     f"{trailer.magic.hex(' ')} intan_frame_count="
                     f"{trailer.intan_frame_count}; plausible trailer offsets="
                     f"{candidates[:8]}"
+                )
+            elif magic_offsets:
+                print(
+                    f"  Sanity: expected trailer at offset "
+                    f"{PACKET_TRAILER_OFFSET}, but magic="
+                    f"{trailer.magic.hex(' ')} intan_frame_count="
+                    f"{trailer.intan_frame_count}; raw magic offsets="
+                    f"{magic_offsets[:16]}"
                 )
             else:
                 print(
