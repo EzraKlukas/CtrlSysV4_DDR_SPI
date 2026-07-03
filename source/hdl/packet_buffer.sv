@@ -25,6 +25,7 @@ module packet_buffer #(
     output logic                    empty,
     output logic                    full,
     output logic                    packet_space,
+    output logic                    packet_available,
     output logic                    overflow,
     output logic                    underflow
 );
@@ -57,6 +58,7 @@ assign empty = count == 0;
 assign full = count == DEPTH_WORDS;
 assign free_words = DEPTH_WORDS - count;
 assign packet_space = free_words >= PACKET_WORDS;
+assign packet_available = count >= PACKET_WORDS;
 assign do_write = wr_en && !full;
 assign do_read = rd_en && !empty;
 

@@ -69,6 +69,7 @@ logic spi_start;
 logic core_rst;
 
 ICM_frame_t icm_frame;
+ICM_frame_t debug_icm_frame;
 Intan_frame_t intan_frame;
 
 logic spi_reader_sclk;
@@ -82,12 +83,12 @@ logic intan_done;
 logic axi_spi_miso;
 
 logic packet_fifo_full;
-logic packet_fifo_empty;
 logic packet_fifo_overflow;
 logic packet_fifo_underflow;
 logic packet_fifo_rd_en;
 logic packet_fifo_wr_en;
 logic packet_fifo_packet_space;
+logic packet_fifo_packet_available;
 logic [AXIS_DATA_WIDTH-1:0] packet_fifo_wr_data;
 logic [AXIS_DATA_WIDTH-1:0] packet_fifo_rd_data;
 logic packet_writer_ready;
@@ -268,6 +269,7 @@ always_ff @(posedge clk) begin
         error_latched   <= 1'b0;
         error_code      <= 32'b0;
         packet_done_irq <= 1'b0;
+        debug_icm_frame <= '0;
         data_word0      <= 32'b0;
         data_word1      <= 32'b0;
         data_word2      <= 32'b0;
@@ -297,14 +299,17 @@ always_ff @(posedge clk) begin
             error_code <= 32'h0000_0001;
         end
 
+        if (spi_done)
+            debug_icm_frame <= icm_frame;
+
         if (packet_writer_packet_done) begin
             data_word0 <= sample_count;
             data_word1 <= PACKET_AXIS_WORDS;
             data_word2 <= PACKET_BUFFER_WORDS;
-            data_word3 <= icm_frame.init_read_ts[31:0];
-            data_word4 <= icm_frame.init_read_ts[63:32];
-            data_word5 <= icm_frame.done_read_ts[31:0];
-            data_word6 <= icm_frame.done_read_ts[63:32];
+            data_word3 <= debug_icm_frame.init_read_ts[31:0];
+            data_word4 <= debug_icm_frame.init_read_ts[63:32];
+            data_word5 <= debug_icm_frame.done_read_ts[31:0];
+            data_word6 <= debug_icm_frame.done_read_ts[63:32];
             data_word7 <= PACKET_BYTES;
         end
     end
@@ -321,9 +326,10 @@ packet_buffer #(
     .wr_data(packet_fifo_wr_data),
     .rd_en(packet_fifo_rd_en),
     .rd_data(packet_fifo_rd_data),
-    .empty(packet_fifo_empty),
+    .empty(),
     .full(packet_fifo_full),
     .packet_space(packet_fifo_packet_space),
+    .packet_available(packet_fifo_packet_available),
     .overflow(packet_fifo_overflow),
     .underflow(packet_fifo_underflow)
 );
@@ -333,7 +339,7 @@ packet_to_axis u_packet_to_axis (
     .rst(core_rst),
     .fifo_rd_en(packet_fifo_rd_en),
     .fifo_rd_data(packet_fifo_rd_data),
-    .fifo_empty(packet_fifo_empty),
+    .fifo_packet_available(packet_fifo_packet_available),
     .m_axis_tvalid(m_axis_tvalid),
     .m_axis_tready(m_axis_tready),
     .m_axis_tdata(m_axis_tdata),

@@ -18,7 +18,7 @@ module packet_to_axis #(
 
     output logic                    fifo_rd_en,
     input  logic [DATA_WIDTH-1:0]   fifo_rd_data,
-    input  logic                    fifo_empty,
+    input  logic                    fifo_packet_available,
 
     output logic                    m_axis_tvalid,
     input  logic                    m_axis_tready,
@@ -83,7 +83,7 @@ always_ff @(posedge clk) begin
                 m_axis_tlast <= 1'b0;
                 m_axis_tkeep <= '0;
 
-                if (!fifo_empty) begin
+                if (fifo_packet_available) begin
                     fifo_rd_en <= 1'b1;
                     state <= WAIT_FOR_READ;
                 end
@@ -105,16 +105,13 @@ always_ff @(posedge clk) begin
                 if (m_axis_tready) begin
                     m_axis_tvalid <= 1'b0;
 
-                    if (word_index == PACKET_WORDS - 1)
+                    if (word_index == PACKET_WORDS - 1) begin
                         word_index <= '0;
-                    else
+                        state <= IDLE;
+                    end else begin
                         word_index <= word_index + 1'b1;
-
-                    if (!fifo_empty) begin
                         fifo_rd_en <= 1'b1;
                         state <= WAIT_FOR_READ;
-                    end else begin
-                        state <= IDLE;
                     end
                 end
             end

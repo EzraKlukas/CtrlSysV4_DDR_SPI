@@ -30,10 +30,11 @@ module ICM_reader #(
     output logic cs_n 
 );
 
-localparam logic [1:0] IDLE      = 2'b00;
-localparam logic [1:0] SEND_ADDR = 2'b01;
-localparam logic [1:0] WAIT_DATA = 2'b10;
-localparam logic [1:0] READ_DATA = 2'b11;
+localparam logic [2:0] IDLE      = 3'b000;
+localparam logic [2:0] SEND_ADDR = 3'b001;
+localparam logic [2:0] WAIT_DATA = 3'b010;
+localparam logic [2:0] READ_DATA = 3'b011;
+localparam logic [2:0] DONE      = 3'b100;
 
 // sequential copies of spi lines
 logic cs_drive;
@@ -49,7 +50,7 @@ logic spi_clk_rising;
 logic spi_clk_falling;
 
 // State machine
-logic [1:0] state;
+logic [2:0] state;
 
 // data
 logic [7:0] data_temp;
@@ -173,9 +174,8 @@ always_ff @(posedge clk) begin
 
                 if (counter == 0) begin
                     counter <= 7; // reset counter
-                    if (num_data_bytes == 0) begin 
-                        state <= IDLE;
-                        done <= 1'b1;
+                    if (num_data_bytes == 0) begin
+                        state <= DONE;
                         tick_en <= 1'b0;
                         cs_drive <= 1'b1;
                         ICM_frame.done_read_ts <= timestamp;
@@ -185,6 +185,14 @@ always_ff @(posedge clk) begin
                 end else 
                     counter <= counter - 1;
             end
+        end
+
+        DONE: begin
+            done <= 1'b1;
+            state <= IDLE;
+            tick_en <= 1'b0;
+            cs_drive <= 1'b1;
+            mosi_drive <= 1'b0;
         end
 
         default: begin

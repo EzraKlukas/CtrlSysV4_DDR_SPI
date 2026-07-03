@@ -60,7 +60,9 @@ typedef enum logic [2:0] {
 
 state_t state;
 
-(* ram_style = "block" *) logic [7:0] intan_fifo [0:INTAN_FIFO_BYTES-1];
+// The byte packer reads the FIFO data combinationally in STREAM_INTAN.
+// Keep this as distributed RAM so synthesis matches the async-read model.
+(* ram_style = "distributed" *) logic [7:0] intan_fifo [0:INTAN_FIFO_BYTES-1];
 logic [INTAN_FIFO_PTR_WIDTH-1:0] intan_wptr;
 logic [INTAN_FIFO_PTR_WIDTH-1:0] intan_rptr;
 logic [INTAN_FIFO_COUNT_WIDTH-1:0] intan_byte_count;
@@ -75,10 +77,16 @@ logic [INTAN_BYTE_INDEX_WIDTH-1:0] serialize_byte_index;
 ICM_frame_t icm_frame_reg;
 logic icm_pending;
 
-packet_trailer_t trailer_reg;
 logic [31:0] packet_counter;
 logic [31:0] dropped_intan_frames;
 logic [31:0] dropped_icm_frames;
+logic [31:0] trailer_packet_num;
+logic [31:0] trailer_valid_data_bytes;
+logic [31:0] trailer_intan_frame_count;
+logic [31:0] trailer_icm_frame_start_index;
+logic [31:0] trailer_flags;
+logic [31:0] trailer_dropped_intan_frames;
+logic [31:0] trailer_dropped_icm_frames;
 
 logic [INTAN_FRAME_COUNT_WIDTH-1:0] packet_intan_frames;
 logic [INTAN_PACKET_BYTE_COUNT_WIDTH-1:0] packet_intan_bytes;
@@ -103,8 +111,6 @@ logic intan_frame_read_done;
 logic [31:0] snapshot_intan_bytes;
 logic [31:0] snapshot_valid_data_bytes;
 logic [31:0] snapshot_icm_offset;
-
-integer offset_idx;
 
 initial begin
     if (DATA_WIDTH < 8 || (DATA_WIDTH % 8) != 0)
@@ -149,33 +155,94 @@ begin
 end
 endfunction
 
-function automatic logic [7:0] trailer_byte(
-    input packet_trailer_t trailer,
-    input logic [TRAILER_BYTE_INDEX_WIDTH-1:0] byte_index
+function automatic logic [7:0] u32_be_byte(
+    input logic [31:0] value,
+    input logic [1:0] byte_index
 );
-    int unsigned msb;
 begin
-    msb = PACKET_TRAILER_BITS - 1 - 8 * byte_index;
-    trailer_byte = trailer[msb -: 8];
+    case (byte_index)
+        2'd0: u32_be_byte = value[31:24];
+        2'd1: u32_be_byte = value[23:16];
+        2'd2: u32_be_byte = value[15:8];
+        default: u32_be_byte = value[7:0];
+    endcase
 end
 endfunction
 
-function automatic logic [DATA_WIDTH-1:0] insert_byte(
-    input logic [DATA_WIDTH-1:0] word,
-    input logic [BYTE_INDEX_WIDTH-1:0] byte_index,
-    input logic [7:0] byte_value
+function automatic logic [7:0] trailer_byte_value(
+    input logic [TRAILER_BYTE_INDEX_WIDTH-1:0] byte_index
 );
-    logic [DATA_WIDTH-1:0] result;
+    int unsigned offset_index;
+    logic [31:0] offset_value;
 begin
-    result = word;
-    result[8 * byte_index +: 8] = byte_value;
-    insert_byte = result;
+    offset_index = 0;
+    offset_value = 32'b0;
+    trailer_byte_value = 8'h00;
+
+    case (byte_index)
+        8'd0, 8'd1, 8'd2, 8'd3, 8'd4, 8'd5, 8'd6, 8'd7:
+            trailer_byte_value = 8'hff;
+
+        8'd8:  trailer_byte_value = trailer_packet_num[31:24];
+        8'd9:  trailer_byte_value = trailer_packet_num[23:16];
+        8'd10: trailer_byte_value = trailer_packet_num[15:8];
+        8'd11: trailer_byte_value = trailer_packet_num[7:0];
+
+        8'd14: trailer_byte_value = 8'h01;
+
+        8'd18: trailer_byte_value = 8'h60;
+
+        8'd20: trailer_byte_value = trailer_valid_data_bytes[31:24];
+        8'd21: trailer_byte_value = trailer_valid_data_bytes[23:16];
+        8'd22: trailer_byte_value = trailer_valid_data_bytes[15:8];
+        8'd23: trailer_byte_value = trailer_valid_data_bytes[7:0];
+
+        8'd24: trailer_byte_value = trailer_intan_frame_count[31:24];
+        8'd25: trailer_byte_value = trailer_intan_frame_count[23:16];
+        8'd26: trailer_byte_value = trailer_intan_frame_count[15:8];
+        8'd27: trailer_byte_value = trailer_intan_frame_count[7:0];
+
+        8'd31: trailer_byte_value = 8'h2d;
+
+        8'd35: trailer_byte_value = 8'h01;
+
+        8'd36: trailer_byte_value = trailer_icm_frame_start_index[31:24];
+        8'd37: trailer_byte_value = trailer_icm_frame_start_index[23:16];
+        8'd38: trailer_byte_value = trailer_icm_frame_start_index[15:8];
+        8'd39: trailer_byte_value = trailer_icm_frame_start_index[7:0];
+
+        8'd42: trailer_byte_value = 8'h5f;
+
+        8'd44: trailer_byte_value = trailer_flags[31:24];
+        8'd45: trailer_byte_value = trailer_flags[23:16];
+        8'd46: trailer_byte_value = trailer_flags[15:8];
+        8'd47: trailer_byte_value = trailer_flags[7:0];
+
+        8'd48: trailer_byte_value = trailer_dropped_intan_frames[31:24];
+        8'd49: trailer_byte_value = trailer_dropped_intan_frames[23:16];
+        8'd50: trailer_byte_value = trailer_dropped_intan_frames[15:8];
+        8'd51: trailer_byte_value = trailer_dropped_intan_frames[7:0];
+
+        8'd52: trailer_byte_value = trailer_dropped_icm_frames[31:24];
+        8'd53: trailer_byte_value = trailer_dropped_icm_frames[23:16];
+        8'd54: trailer_byte_value = trailer_dropped_icm_frames[15:8];
+        8'd55: trailer_byte_value = trailer_dropped_icm_frames[7:0];
+
+        default: begin
+            if (byte_index >= 8'd56 && byte_index < PACKET_TRAILER_FIXED_BYTES) begin
+                offset_index = (byte_index - 8'd56) >> 2;
+                if (offset_index < trailer_intan_frame_count && offset_index < MAX_INTAN_FRAMES)
+                    offset_value = offset_index[31:0] * INTAN_FRAME_BYTES;
+                trailer_byte_value = u32_be_byte(offset_value, byte_index[1:0]);
+            end
+        end
+    endcase
 end
 endfunction
 
 assign ready = packet_ready && state == IDLE && !icm_pending;
 assign can_pack_byte = !word_valid || word_ready;
-assign pack_word_with_byte = insert_byte(pack_word, pack_byte_count, source_byte);
+assign pack_word_with_byte = {source_byte, pack_word[DATA_WIDTH-1:8]};
 assign emit_word = source_valid && (source_last || pack_byte_count == AXIS_BYTES - 1);
 assign source_last = packet_byte_index == PACKET_BYTES - 1;
 
@@ -210,7 +277,7 @@ always_comb begin
 
         STREAM_TRAILER: begin
             source_valid = 1'b1;
-            source_byte = trailer_byte(trailer_reg, trailer_byte_index);
+            source_byte = trailer_byte_value(trailer_byte_index);
         end
 
         default: begin
@@ -234,10 +301,16 @@ always_ff @(posedge clk) begin
         serialize_byte_index <= '0;
         icm_frame_reg <= '0;
         icm_pending <= 1'b0;
-        trailer_reg <= '0;
         packet_counter <= 32'b0;
         dropped_intan_frames <= 32'b0;
         dropped_icm_frames <= 32'b0;
+        trailer_packet_num <= 32'b0;
+        trailer_valid_data_bytes <= 32'b0;
+        trailer_intan_frame_count <= 32'b0;
+        trailer_icm_frame_start_index <= 32'b0;
+        trailer_flags <= 32'b0;
+        trailer_dropped_intan_frames <= 32'b0;
+        trailer_dropped_icm_frames <= 32'b0;
         packet_intan_frames <= '0;
         packet_intan_bytes <= '0;
         intan_bytes_streamed <= '0;
@@ -338,32 +411,18 @@ always_ff @(posedge clk) begin
             else
                 state <= STREAM_INTAN;
 
-            trailer_reg.magic_ones <= 64'hFFFF_FFFF_FFFF_FFFF;
-            trailer_reg.packet_num <= packet_counter;
-            trailer_reg.trailer_bytes <= PACKET_TRAILER_BYTES;
-            trailer_reg.packet_bytes <= PACKET_BYTES;
-            trailer_reg.valid_data_bytes <= snapshot_valid_data_bytes;
-            trailer_reg.intan_frame_count <= complete_intan_frames;
-            trailer_reg.max_intan_frame_count <= MAX_INTAN_FRAMES;
-            trailer_reg.icm_frame_count <= 32'd1;
-            trailer_reg.icm_frame_start_index <= snapshot_icm_offset;
-            trailer_reg.trailer_start_index <= PACKET_TRAILER_OFFSET_BYTES;
-            trailer_reg.flags <= {
+            trailer_packet_num <= packet_counter;
+            trailer_valid_data_bytes <= snapshot_valid_data_bytes;
+            trailer_intan_frame_count <= complete_intan_frames;
+            trailer_icm_frame_start_index <= snapshot_icm_offset;
+            trailer_flags <= {
                 29'b0,
                 complete_intan_frames == MAX_INTAN_FRAMES,
                 dropped_icm_frames != 0,
                 dropped_intan_frames != 0
             };
-            trailer_reg.dropped_intan_frames <= dropped_intan_frames;
-            trailer_reg.dropped_icm_frames <= dropped_icm_frames;
-            trailer_reg.reserved <= '0;
-
-            for (offset_idx = 0; offset_idx < TRAILER_INTAN_OFFSET_COUNT; offset_idx = offset_idx + 1) begin
-                if (offset_idx < complete_intan_frames && offset_idx < MAX_INTAN_FRAMES)
-                    trailer_reg.intan_frame_start_indices[offset_idx] <= offset_idx * INTAN_FRAME_BYTES;
-                else
-                    trailer_reg.intan_frame_start_indices[offset_idx] <= 32'b0;
-            end
+            trailer_dropped_intan_frames <= dropped_intan_frames;
+            trailer_dropped_icm_frames <= dropped_icm_frames;
 
             dropped_intan_frames <= 32'b0;
             dropped_icm_frames <= 32'b0;

@@ -23,8 +23,17 @@ module Intan_reader #(
 
 localparam int DELAY_COUNTER_WIDTH = (DONE_DELAY_CYCLES > 1) ? $clog2(DONE_DELAY_CYCLES) : 1;
 
+typedef enum logic [1:0] {
+    IDLE,
+    WAIT_DONE,
+    DONE
+} state_t;
+
+state_t state;
 logic [DELAY_COUNTER_WIDTH-1:0] delay_counter;
 logic [31:0] sample_counter;
+
+assign busy = state != IDLE;
 
 integer sensor_idx;
 integer word_idx;
@@ -40,7 +49,7 @@ end
 
 always_ff @(posedge clk) begin
     if (rst) begin
-        busy <= 1'b0;
+        state <= IDLE;
         done <= 1'b0;
         delay_counter <= '0;
         sample_counter <= 32'b0;
@@ -54,32 +63,45 @@ always_ff @(posedge clk) begin
     end else begin
         done <= 1'b0;
 
-        if (!busy) begin
-            if (start) begin
-                busy <= 1'b1;
-                delay_counter <= DONE_DELAY_CYCLES - 1;
-                Intan_frame.init_read_ts <= timestamp;
-                Intan_frame.done_read_ts <= 64'b0;
+        case (state)
+            IDLE: begin
+                if (start) begin
+                    state <= WAIT_DONE;
+                    delay_counter <= DONE_DELAY_CYCLES - 1;
+                    Intan_frame.init_read_ts <= timestamp;
+                    Intan_frame.done_read_ts <= 64'b0;
 
-                for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                    Intan_frame.Intan_data[sensor_idx].sensor_id <= sensor_idx[7:0];
+                    for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
+                        Intan_frame.Intan_data[sensor_idx].sensor_id <= sensor_idx[7:0];
 
-                    for (word_idx = 0; word_idx < INTAN_DATA_BYTES / 4; word_idx = word_idx + 1) begin
-                        Intan_frame.Intan_data[sensor_idx].data[word_idx*32 +: 32] <=
-                            sample_counter + sensor_idx[31:0] * 32 + word_idx[31:0];
+                        for (word_idx = 0; word_idx < INTAN_DATA_BYTES / 4; word_idx = word_idx + 1) begin
+                            Intan_frame.Intan_data[sensor_idx].data[word_idx*32 +: 32] <=
+                                sample_counter + sensor_idx[31:0] * 32 + word_idx[31:0];
+                        end
                     end
                 end
             end
-        end else begin
-            if (delay_counter == 0) begin
-                busy <= 1'b0;
-                done <= 1'b1;
-                sample_counter <= sample_counter + 1'b1;
-                Intan_frame.done_read_ts <= timestamp;
-            end else begin
-                delay_counter <= delay_counter - 1'b1;
+
+            WAIT_DONE: begin
+                if (delay_counter == 0) begin
+                    state <= DONE;
+                    sample_counter <= sample_counter + 1'b1;
+                    Intan_frame.done_read_ts <= timestamp;
+                end else begin
+                    delay_counter <= delay_counter - 1'b1;
+                end
             end
-        end
+
+            DONE: begin
+                done <= 1'b1;
+                state <= IDLE;
+            end
+
+            default: begin
+                state <= IDLE;
+                done <= 1'b0;
+            end
+        endcase
     end
 end
 
