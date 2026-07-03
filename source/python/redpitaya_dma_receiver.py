@@ -696,13 +696,13 @@ def main() -> int:
                 elapsed_ms = (arrival_perf_ns - first_perf_ns) / 1_000_000
                 previous_perf_ns = arrival_perf_ns
 
-                frame = struct.unpack("!" + "I" * frame_words, frame_payload)
+                frame: tuple[int, ...] | None = None
                 if selected_dma_byte_order is None:
-                    selected_dma_byte_order = (
-                        choose_dma_byte_order(frame)
-                        if args.dma_byte_order == "auto"
-                        else args.dma_byte_order
-                    )
+                    if args.dma_byte_order == "auto":
+                        frame = struct.unpack("!" + "I" * frame_words, frame_payload)
+                        selected_dma_byte_order = choose_dma_byte_order(frame)
+                    else:
+                        selected_dma_byte_order = args.dma_byte_order
                     if (
                         args.print_sensor_data
                         or args.print_trailer
@@ -712,12 +712,20 @@ def main() -> int:
                             f"using DMA word byte order: "
                             f"{selected_dma_byte_order}"
                         )
-                frame_bytes = frame_words_to_dma_bytes(
-                    frame,
-                    selected_dma_byte_order or "little",
-                )
+
+                if selected_dma_byte_order == "big":
+                    frame_bytes = frame_payload
+                else:
+                    if frame is None:
+                        frame = struct.unpack("!" + "I" * frame_words, frame_payload)
+                    frame_bytes = frame_words_to_dma_bytes(
+                        frame,
+                        selected_dma_byte_order or "little",
+                    )
 
                 if frame_words == FRAME_WORDS:
+                    if frame is None:
+                        frame = struct.unpack("!" + "I" * frame_words, frame_payload)
                     start_ticks = (frame[1] << 32) | frame[0]
                     done_ticks = (frame[3] << 32) | frame[2]
                 else:
@@ -774,7 +782,11 @@ def main() -> int:
                         fpga_delta_ticks,
                         f"{fpga_delta_ms:.6f}",
                         f"{read_us:.6f}",
-                        sensor_bytes_from_frame(frame).hex(" "),
+                        (
+                            sensor_bytes_from_frame(frame).hex(" ")
+                            if frame is not None and frame_words == FRAME_WORDS
+                            else ""
+                        ),
                     ])
                     if args.flush_every > 0 and (received + 1) % args.flush_every == 0:
                         csv_file.flush()
