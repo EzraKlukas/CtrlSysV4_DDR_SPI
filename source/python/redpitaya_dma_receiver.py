@@ -491,6 +491,20 @@ def print_captured_sensor_data(packets: list[CapturedPacket],
         print_packet_sanity(packet.frame_bytes, trailer)
 
 
+def print_captured_trailers(packets: list[CapturedPacket]) -> None:
+    if not packets:
+        print("no captured sensor packets to print")
+        return
+
+    print("\nDecoded packet trailers:")
+    for packet in packets:
+        print(
+            f"Packet seq={packet.sequence} irq={packet.irq_count} "
+            f"core_count={packet.core_count}"
+        )
+        print_packet_trailer(packet.frame_bytes, packet.frame_words)
+
+
 def print_captured_raw_bytes(packets: list[CapturedPacket],
                              bytes_per_line: int) -> None:
     if not packets:
@@ -602,6 +616,8 @@ def main() -> int:
                         help="flush the CSV file every N rows; 0 flushes only at the end")
     parser.add_argument("--print-sensor-data", action="store_true",
                         help="print decoded Intan/ICM packet contents after capture")
+    parser.add_argument("--print-trailer", action="store_true",
+                        help="print decoded packet trailers after capture")
     parser.add_argument("--print-raw-bytes", action="store_true",
                         help="print raw reconstructed DMA packet bytes after capture")
     parser.add_argument("--print-packets", type=int, default=1,
@@ -668,7 +684,11 @@ def main() -> int:
                         if args.dma_byte_order == "auto"
                         else args.dma_byte_order
                     )
-                    if args.print_sensor_data or args.print_raw_bytes:
+                    if (
+                        args.print_sensor_data
+                        or args.print_trailer
+                        or args.print_raw_bytes
+                    ):
                         print(
                             f"using DMA word byte order: "
                             f"{selected_dma_byte_order}"
@@ -707,7 +727,11 @@ def main() -> int:
                         read_us=read_us,
                     ))
                 if (
-                    (args.print_sensor_data or args.print_raw_bytes)
+                    (
+                        args.print_sensor_data
+                        or args.print_trailer
+                        or args.print_raw_bytes
+                    )
                     and len(captured_packets) < max(0, args.print_packets)
                 ):
                     captured_packets.append(CapturedPacket(
@@ -769,6 +793,8 @@ def main() -> int:
                 max(0, args.print_sensors),
                 max(0, args.print_data_bytes),
             )
+        elif args.print_trailer:
+            print_captured_trailers(captured_packets)
         if args.print_raw_bytes:
             print_captured_raw_bytes(
                 captured_packets,
