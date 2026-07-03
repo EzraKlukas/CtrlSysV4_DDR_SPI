@@ -291,6 +291,25 @@ def read_u64_be(data: bytes, offset: int) -> int:
     return int.from_bytes(data[offset:offset + 8], "big")
 
 
+def packet_timestamps_from_bytes(data: bytes) -> tuple[int, int]:
+    if len(data) < PACKET_BYTES:
+        return 0, 0
+
+    trailer = decode_packet_trailer(data)
+    if (
+        trailer.magic != PACKET_MAGIC
+        or trailer.icm_frame_count == 0
+        or trailer.icm_offset + 16 > len(data)
+        or trailer.icm_offset >= trailer.trailer_offset
+    ):
+        return 0, 0
+
+    return (
+        read_u64_be(data, trailer.icm_offset),
+        read_u64_be(data, trailer.icm_offset + 8),
+    )
+
+
 def print_intan_frame(data: bytes, frame_index: int, max_sensors: int,
                       max_data_bytes: int, intan_offset: int) -> None:
     offset = intan_offset + frame_index * INTAN_FRAME_BYTES
@@ -702,8 +721,7 @@ def main() -> int:
                     start_ticks = (frame[1] << 32) | frame[0]
                     done_ticks = (frame[3] << 32) | frame[2]
                 else:
-                    start_ticks = 0
-                    done_ticks = 0
+                    start_ticks, done_ticks = packet_timestamps_from_bytes(frame_bytes)
                 fpga_delta_ticks = (
                     0 if previous_start_ticks is None or start_ticks == 0
                     else start_ticks - previous_start_ticks
