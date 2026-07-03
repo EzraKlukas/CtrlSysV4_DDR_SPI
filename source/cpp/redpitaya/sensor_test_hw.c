@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -809,6 +810,48 @@ static int send_all(int fd, const void *data, size_t length)
     return 0;
 }
 
+static int send_iov_all(int fd, struct iovec *iov, int iovcnt)
+{
+    while (iovcnt > 0) {
+        struct msghdr msg;
+        ssize_t chunk;
+        size_t sent;
+
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_iov = iov;
+        msg.msg_iovlen = (size_t)iovcnt;
+
+#ifdef MSG_NOSIGNAL
+        chunk = sendmsg(fd, &msg, MSG_NOSIGNAL);
+#else
+        chunk = sendmsg(fd, &msg, 0);
+#endif
+        if (chunk < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("send TCP sample");
+            return -1;
+        }
+        if (chunk == 0) {
+            fprintf(stderr, "TCP peer closed while sending sample.\n");
+            return -1;
+        }
+
+        sent = (size_t)chunk;
+        while (iovcnt > 0 && sent >= iov[0].iov_len) {
+            sent -= iov[0].iov_len;
+            ++iov;
+            --iovcnt;
+        }
+        if (iovcnt > 0 && sent > 0) {
+            iov[0].iov_base = (uint8_t *)iov[0].iov_base + sent;
+            iov[0].iov_len -= sent;
+        }
+    }
+
+    return 0;
+}
+
 static int send_dma_frame(int stream_fd, uint32_t sequence, uint32_t irq_count,
                           uint32_t sample_count,
                           const uint32_t frame[FRAME_WORDS])
@@ -834,6 +877,7 @@ static int send_dma_words_raw(int stream_fd, uint32_t sequence,
                               size_t word_count)
 {
     uint32_t header[6];
+    struct iovec iov[2];
 
     if (word_count > UINT32_MAX) {
         fprintf(stderr, "TCP packet is too large to encode.\n");
@@ -847,11 +891,12 @@ static int send_dma_words_raw(int stream_fd, uint32_t sequence,
     header[4] = htonl(sample_count);
     header[5] = htonl((uint32_t)word_count);
 
-    if (send_all(stream_fd, header, sizeof(header)) != 0)
-        return -1;
+    iov[0].iov_base = header;
+    iov[0].iov_len = sizeof(header);
+    iov[1].iov_base = (void *)words;
+    iov[1].iov_len = word_count * sizeof(*words);
 
-    return send_all(stream_fd, (const void *)words,
-                    word_count * sizeof(*words));
+    return send_iov_all(stream_fd, iov, 2);
 }
 
 static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
