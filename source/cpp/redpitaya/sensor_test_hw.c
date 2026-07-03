@@ -120,6 +120,11 @@
 #define FRAME_BYTES     (FRAME_WORDS * sizeof(uint32_t))
 #define SAMPLE_PERIOD   SENSOR_TEST_SAMPLE_CLOCK_HZ /* 1 s at runtime FCLK. */
 #define TIMEOUT_MS      2000u
+#define ICM_INTAN_PACKET_TRAILER_BYTES 256u
+#define ICM_INTAN_PACKET_TRAILER_OFFSET \
+    (SENSOR_TEST_INTAN8_ICM4_PACKET_BYTES - ICM_INTAN_PACKET_TRAILER_BYTES)
+#define ICM_INTAN_PACKET_TRAILER_WORD \
+    (ICM_INTAN_PACKET_TRAILER_OFFSET / sizeof(uint32_t))
 
 static uint32_t axi_spi_mode_bits;
 
@@ -823,46 +828,42 @@ static int send_dma_frame(int stream_fd, uint32_t sequence, uint32_t irq_count,
     return send_all(stream_fd, packet, sizeof(packet));
 }
 
-static int send_dma_words(int stream_fd, uint32_t sequence, uint32_t irq_count,
-                          uint32_t sample_count, const uint32_t *words,
-                          size_t word_count)
+static int send_dma_words_raw(int stream_fd, uint32_t sequence,
+                              uint32_t irq_count, uint32_t sample_count,
+                              const volatile uint32_t *words,
+                              size_t word_count)
 {
-    uint32_t *packet;
-    size_t i;
-    int result;
+    uint32_t header[6];
 
-    if (word_count > UINT32_MAX - 6u ||
-        word_count > (SIZE_MAX / sizeof(*packet)) - 6u) {
+    if (word_count > UINT32_MAX) {
         fprintf(stderr, "TCP packet is too large to encode.\n");
         return -1;
     }
 
-    packet = malloc((6u + word_count) * sizeof(*packet));
-    if (!packet) {
-        perror("allocate TCP packet");
+    header[0] = htonl(SENSOR_TEST_TCP_MAGIC);
+    header[1] = htonl(SENSOR_TEST_TCP_VERSION);
+    header[2] = htonl(sequence);
+    header[3] = htonl(irq_count);
+    header[4] = htonl(sample_count);
+    header[5] = htonl((uint32_t)word_count);
+
+    if (send_all(stream_fd, header, sizeof(header)) != 0)
         return -1;
-    }
 
-    packet[0] = htonl(SENSOR_TEST_TCP_MAGIC);
-    packet[1] = htonl(SENSOR_TEST_TCP_VERSION);
-    packet[2] = htonl(sequence);
-    packet[3] = htonl(irq_count);
-    packet[4] = htonl(sample_count);
-    packet[5] = htonl((uint32_t)word_count);
-    for (i = 0; i < word_count; ++i)
-        packet[6 + i] = htonl(words[i]);
-
-    result = send_all(stream_fd, packet, (6u + word_count) * sizeof(*packet));
-    free(packet);
-    return result;
+    return send_all(stream_fd, (const void *)words,
+                    word_count * sizeof(*words));
 }
 
 static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
-                            uint32_t sample_count, const uint32_t *words,
+                            uint32_t sample_count,
+                            const volatile uint32_t *words,
                             size_t word_count)
 {
     size_t i;
     size_t preview = word_count < 16u ? word_count : 16u;
+    size_t trailer_word = ICM_INTAN_PACKET_TRAILER_WORD;
+    size_t trailer_preview = 16u;
+    int found_magic = 0;
 
     printf("\nDMA interrupt sample %u, UIO irq count %" PRIu32
            ", core sample count %" PRIu32 "\n",
@@ -881,6 +882,33 @@ static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
             printf("0x%08" PRIx32 "%c", words[i],
                    i + 1 == word_count ? '\n' : ' ');
     }
+
+    if (word_count > trailer_word) {
+        size_t limit = word_count - trailer_word;
+        if (trailer_preview > limit)
+            trailer_preview = limit;
+
+        printf("Words at expected trailer offset 0x%04x (word %zu):\n  ",
+               ICM_INTAN_PACKET_TRAILER_OFFSET, trailer_word);
+        for (i = 0; i < trailer_preview; ++i) {
+            size_t index = trailer_word + i;
+            printf("0x%08" PRIx32 "%c", words[index],
+                   i + 1 == trailer_preview ? '\n' : ' ');
+        }
+    }
+
+    for (i = 0; i + 1 < word_count; ++i) {
+        if (words[i] == UINT32_MAX && words[i + 1] == UINT32_MAX) {
+            if (!found_magic)
+                printf("0xffffffffffffffff word-pair offsets:");
+            printf(" byte 0x%zx", i * sizeof(uint32_t));
+            found_magic = 1;
+        }
+    }
+    if (found_magic)
+        printf("\n");
+    else
+        printf("No 0xffffffffffffffff word-pair found in DMA frame.\n");
 }
 
 static size_t dma_buffer_available_bytes(const struct dma_buffer *buffer)
@@ -1276,7 +1304,6 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
     volatile uint32_t *core;
     volatile uint32_t *dma;
     struct dma_buffer *buffer;
-    uint32_t *frame = NULL;
     size_t frame_words;
     unsigned completed = 0;
     int core_enabled = 0;
@@ -1309,16 +1336,9 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         return -1;
     }
 
-    frame = malloc(transfer_bytes);
-    if (!frame) {
-        perror("allocate DMA frame copy");
-        return -1;
-    }
-
     uio_fd = open(uio_device, O_RDWR);
     if (uio_fd < 0) {
         fprintf(stderr, "open %s: %s\n", uio_device, strerror(errno));
-        free(frame);
         return -1;
     }
 
@@ -1339,11 +1359,6 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
     while (transfer_count == 0 || completed < transfer_count) {
         uint32_t irq_count = 0;
         uint32_t dma_status;
-        size_t i;
-
-        for (i = 0; i < frame_words; ++i)
-            buffer->words[i] = 0xfeed0000u | (uint32_t)i;
-        __sync_synchronize();
 
         reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
         if (enable_uio_interrupt(uio_fd) != 0)
@@ -1377,19 +1392,17 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         }
 
         __sync_synchronize();
-        for (i = 0; i < frame_words; ++i)
-            frame[i] = buffer->words[i];
 
         ++completed;
         if (stream_fd >= 0 &&
-            send_dma_words(stream_fd, completed, irq_count,
-                           reg_read(core, CORE_COUNT), frame,
-                           frame_words) != 0)
+            send_dma_words_raw(stream_fd, completed, irq_count,
+                               reg_read(core, CORE_COUNT), buffer->words,
+                               frame_words) != 0)
             goto failure;
 
         if (print_frames) {
             print_dma_words(completed, irq_count, reg_read(core, CORE_COUNT),
-                            frame, frame_words);
+                            buffer->words, frame_words);
             fflush(stdout);
         }
 
@@ -1403,14 +1416,12 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
     reg_write(core, CORE_CONTROL, 0);
     reg_write(dma, S2MM_DMACR, 0);
     close(uio_fd);
-    free(frame);
     return 0;
 
 failure:
     reg_write(core, CORE_CONTROL, 0);
     reg_write(dma, S2MM_DMACR, 0);
     close(uio_fd);
-    free(frame);
     return -1;
 }
 
