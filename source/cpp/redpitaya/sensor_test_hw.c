@@ -1429,7 +1429,6 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
     struct dma_buffer *buffer;
     size_t frame_words;
     unsigned completed = 0;
-    int core_enabled = 0;
     int uio_fd;
 
     if (!test || !test->core || !test->dma || !test->buffer.words) {
@@ -1495,14 +1494,11 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
         reg_write(dma, S2MM_DA_MSB, 0);
         reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
-
-        if (!core_enabled) {
-            reg_write(core, CORE_CONTROL, CONTROL_ENABLE);
-            core_enabled = 1;
-        }
+        reg_write(core, CORE_CONTROL, CONTROL_ENABLE);
 
         if (wait_for_uio_interrupt(uio_fd, &irq_count) != 0)
             goto failure;
+        reg_write(core, CORE_CONTROL, 0);
 
         dma_control = reg_read(dma, S2MM_DMACR);
         dma_status = reg_read(dma, S2MM_DMASR);
