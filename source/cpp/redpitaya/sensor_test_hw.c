@@ -186,6 +186,16 @@ static void dma_buffer_sync_for_cpu(const struct dma_buffer *buffer)
     __sync_synchronize();
 }
 
+static void prefill_dma_words(volatile uint32_t *words, size_t word_count)
+{
+    size_t i;
+
+    for (i = 0; i < word_count; ++i)
+        words[i] = 0xdead0000u | (uint32_t)i;
+
+    __sync_synchronize();
+}
+
 static uint64_t monotonic_ms(void)
 {
     struct timespec now;
@@ -949,6 +959,7 @@ static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
 
     if (word_count > trailer_word) {
         size_t limit = word_count - trailer_word;
+        size_t prefill_matches = 0;
         if (trailer_preview > limit)
             trailer_preview = limit;
 
@@ -956,9 +967,16 @@ static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
                ICM_INTAN_PACKET_TRAILER_OFFSET, trailer_word);
         for (i = 0; i < trailer_preview; ++i) {
             size_t index = trailer_word + i;
+            uint32_t expected_prefill = 0xdead0000u | (uint32_t)index;
+
+            if (words[index] == expected_prefill)
+                ++prefill_matches;
+
             printf("0x%08" PRIx32 "%c", words[index],
                    i + 1 == trailer_preview ? '\n' : ' ');
         }
+        printf("Trailer preview prefill matches: %zu/%zu\n",
+               prefill_matches, trailer_preview);
     }
 
     for (i = 0; i + 1 < word_count; ++i) {
@@ -1004,6 +1022,16 @@ static void print_core_debug_words(volatile uint32_t *core)
                reg_read(core, CORE_DATA0 + i * sizeof(uint32_t)),
                i == 7u ? '\n' : ' ');
     }
+}
+
+static void print_dma_debug_words(uint32_t dmacr, uint32_t dmasr,
+                                  uint32_t dst_addr, uint32_t length)
+{
+    printf("DMA debug: DMACR=0x%08" PRIx32
+           " DMASR=0x%08" PRIx32
+           " DA=0x%08" PRIx32
+           " LENGTH=0x%08" PRIx32 "\n",
+           dmacr, dmasr, dst_addr, length);
 }
 
 static size_t dma_buffer_available_bytes(const struct dma_buffer *buffer)
@@ -1454,12 +1482,15 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
     while (transfer_count == 0 || completed < transfer_count) {
         uint32_t irq_count = 0;
         uint32_t dma_status;
+        uint32_t dma_control;
+        uint32_t dma_dst_addr;
+        uint32_t dma_length;
 
         reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
         if (enable_uio_interrupt(uio_fd) != 0)
             goto failure;
 
-        dma_buffer_sync_for_cpu(buffer);
+        prefill_dma_words(buffer->words, frame_words);
 
         reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
         reg_write(dma, S2MM_DA_MSB, 0);
@@ -1473,7 +1504,10 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         if (wait_for_uio_interrupt(uio_fd, &irq_count) != 0)
             goto failure;
 
+        dma_control = reg_read(dma, S2MM_DMACR);
         dma_status = reg_read(dma, S2MM_DMASR);
+        dma_dst_addr = reg_read(dma, S2MM_DA);
+        dma_length = reg_read(dma, S2MM_LENGTH);
         reg_write(dma, S2MM_DMASR, dma_status & DMA_IRQ_MASK);
 
         if (dma_status & DMA_ERROR_MASK) {
@@ -1499,6 +1533,8 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
             goto failure;
 
         if (print_frames) {
+            print_dma_debug_words(dma_control, dma_status,
+                                  dma_dst_addr, dma_length);
             print_core_debug_words(core);
             print_dma_words(completed, irq_count, reg_read(core, CORE_COUNT),
                             buffer->words, frame_words);
