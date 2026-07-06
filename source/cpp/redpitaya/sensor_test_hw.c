@@ -1485,6 +1485,11 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         uint32_t dma_dst_addr;
         uint32_t dma_length;
 
+        reg_write(core, CORE_CONTROL, CONTROL_RESET);
+        usleep(1000);
+        reg_write(core, CORE_CONTROL, 0);
+        reg_write(core, CORE_COMMAND, COMMAND_CLEAR);
+        reg_write(core, CORE_PERIOD, sample_period_ticks);
         reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
         if (enable_uio_interrupt(uio_fd) != 0)
             goto failure;
