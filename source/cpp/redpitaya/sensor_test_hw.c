@@ -168,6 +168,24 @@ static void reg_write(volatile uint32_t *base, unsigned offset, uint32_t value)
     __sync_synchronize();
 }
 
+static void dma_buffer_sync_for_cpu(const struct dma_buffer *buffer)
+{
+    static int warned;
+
+    if (!buffer || !buffer->mapping || buffer->mapping == MAP_FAILED ||
+        buffer->mapping_size == 0)
+        return;
+
+    if (msync(buffer->mapping, buffer->mapping_size,
+              MS_SYNC | MS_INVALIDATE) != 0 && !warned) {
+        fprintf(stderr,
+                "WARNING: could not invalidate DMA buffer mapping: %s\n",
+                strerror(errno));
+        warned = 1;
+    }
+    __sync_synchronize();
+}
+
 static uint64_t monotonic_ms(void)
 {
     struct timespec now;
@@ -909,6 +927,7 @@ static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
     size_t trailer_word = ICM_INTAN_PACKET_TRAILER_WORD;
     size_t trailer_preview = 16u;
     int found_magic = 0;
+    unsigned magic_windows_printed = 0;
 
     printf("\nDMA interrupt sample %u, UIO irq count %" PRIu32
            ", core sample count %" PRIu32 "\n",
@@ -954,6 +973,37 @@ static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
         printf("\n");
     else
         printf("No 0xffffffffffffffff word-pair found in DMA frame.\n");
+
+    for (i = 0; i + 1 < word_count && magic_windows_printed < 4u; ++i) {
+        if (words[i] == UINT32_MAX && words[i + 1] == UINT32_MAX) {
+            size_t start = i > 4u ? i - 4u : 0u;
+            size_t end = start + 16u;
+            size_t j;
+
+            if (end > word_count)
+                end = word_count;
+
+            printf("Words around magic candidate at byte 0x%zx:\n  ",
+                   i * sizeof(uint32_t));
+            for (j = start; j < end; ++j)
+                printf("0x%08" PRIx32 "%c", words[j],
+                       j + 1 == end ? '\n' : ' ');
+
+            ++magic_windows_printed;
+        }
+    }
+}
+
+static void print_core_debug_words(volatile uint32_t *core)
+{
+    unsigned i;
+
+    printf("Core debug words:\n  ");
+    for (i = 0; i < 8u; ++i) {
+        printf("data%u=0x%08" PRIx32 "%c", i,
+               reg_read(core, CORE_DATA0 + i * sizeof(uint32_t)),
+               i == 7u ? '\n' : ' ');
+    }
 }
 
 static size_t dma_buffer_available_bytes(const struct dma_buffer *buffer)
@@ -1409,6 +1459,8 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         if (enable_uio_interrupt(uio_fd) != 0)
             goto failure;
 
+        dma_buffer_sync_for_cpu(buffer);
+
         reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
         reg_write(dma, S2MM_DA_MSB, 0);
         reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
@@ -1437,6 +1489,7 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         }
 
         __sync_synchronize();
+        dma_buffer_sync_for_cpu(buffer);
 
         ++completed;
         if (stream_fd >= 0 &&
@@ -1446,6 +1499,7 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
             goto failure;
 
         if (print_frames) {
+            print_core_debug_words(core);
             print_dma_words(completed, irq_count, reg_read(core, CORE_COUNT),
                             buffer->words, frame_words);
             fflush(stdout);
