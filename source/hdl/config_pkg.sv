@@ -9,6 +9,14 @@ package config_pkg;
     localparam int AXIS_DATA_WIDTH = 1024;
     localparam int PACKET_BYTES = 24576;
 
+    // Intan SPI timing specifics
+    localparam int INTAN_T_CS_1 = 6;
+    localparam int INTAN_T_CS_2 = 6;
+    localparam int INTAN_T_MOSI = 3;
+    localparam int INTAN_T_MISO = 3;
+    localparam int INTAN_T_CS_OFF = 10;
+    localparam int INTAN_T_SCLK = 3;
+
     // measurement = one sensor's data
     // frame       = all sensors of one type for one read
     // packet      = available Intan frames + one ICM frame + zero padding + metadata trailer
