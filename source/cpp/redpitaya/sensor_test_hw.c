@@ -1427,8 +1427,10 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
     volatile uint32_t *core;
     volatile uint32_t *dma;
     struct dma_buffer *buffer;
+    uint32_t *frame = NULL;
     size_t frame_words;
     unsigned completed = 0;
+    uint32_t dma_length_armed;
     int uio_fd;
 
     if (!test || !test->core || !test->dma || !test->buffer.words) {
@@ -1464,6 +1466,14 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         return -1;
     }
 
+    frame = malloc(transfer_bytes);
+    if (!frame) {
+        fprintf(stderr, "Could not allocate %zu-byte DMA frame copy.\n",
+                transfer_bytes);
+        close(uio_fd);
+        return -1;
+    }
+
     reg_write(core, CORE_CONTROL, CONTROL_RESET);
     usleep(1000);
     reg_write(core, CORE_CONTROL, 0);
@@ -1478,32 +1488,28 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
            " ticks, frame=%zu bytes, UIO=%s\n",
            sample_period_ticks, transfer_bytes, uio_device);
 
+    reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
+    if (enable_uio_interrupt(uio_fd) != 0)
+        goto failure;
+
+    prefill_dma_words(buffer->words, frame_words);
+    reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
+    reg_write(dma, S2MM_DA_MSB, 0);
+    reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
+    dma_length_armed = reg_read(dma, S2MM_LENGTH);
+    reg_write(core, CORE_CONTROL, CONTROL_ENABLE);
+
     while (transfer_count == 0 || completed < transfer_count) {
         uint32_t irq_count = 0;
         uint32_t dma_status;
         uint32_t dma_control;
         uint32_t dma_dst_addr;
         uint32_t dma_length;
-
-        reg_write(core, CORE_CONTROL, CONTROL_RESET);
-        usleep(1000);
-        reg_write(core, CORE_CONTROL, 0);
-        reg_write(core, CORE_COMMAND, COMMAND_CLEAR);
-        reg_write(core, CORE_PERIOD, sample_period_ticks);
-        reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
-        if (enable_uio_interrupt(uio_fd) != 0)
-            goto failure;
-
-        prefill_dma_words(buffer->words, frame_words);
-
-        reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
-        reg_write(dma, S2MM_DA_MSB, 0);
-        reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
-        reg_write(core, CORE_CONTROL, CONTROL_ENABLE);
+        uint32_t sample_count;
+        size_t i;
 
         if (wait_for_uio_interrupt(uio_fd, &irq_count) != 0)
             goto failure;
-        reg_write(core, CORE_CONTROL, 0);
 
         dma_control = reg_read(dma, S2MM_DMACR);
         dma_status = reg_read(dma, S2MM_DMASR);
@@ -1525,38 +1531,56 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
 
         __sync_synchronize();
         dma_buffer_sync_for_cpu(buffer);
+        for (i = 0; i < frame_words; ++i)
+            frame[i] = buffer->words[i];
+        sample_count = reg_read(core, CORE_COUNT);
 
         ++completed;
-        if (stream_fd >= 0 &&
-            send_dma_words_raw(stream_fd, completed, irq_count,
-                               reg_read(core, CORE_COUNT), buffer->words,
-                               frame_words) != 0)
-            goto failure;
-
-        if (print_frames) {
-            print_dma_debug_words(dma_control, dma_status,
-                                  dma_dst_addr, dma_length);
-            print_core_debug_words(core);
-            print_dma_words(completed, irq_count, reg_read(core, CORE_COUNT),
-                            buffer->words, frame_words);
-            fflush(stdout);
-        }
 
         if (reg_read(core, CORE_STATUS) & STATUS_ERROR) {
             fprintf(stderr, "Core error code: 0x%08" PRIx32 "\n",
                     reg_read(core, CORE_ERROR));
             goto failure;
         }
+
+        if (transfer_count == 0 || completed < transfer_count) {
+            prefill_dma_words(buffer->words, frame_words);
+            if (enable_uio_interrupt(uio_fd) != 0)
+                goto failure;
+            reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
+            reg_write(dma, S2MM_DA_MSB, 0);
+            reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
+            dma_length_armed = reg_read(dma, S2MM_LENGTH);
+        }
+
+        if (stream_fd >= 0 &&
+            send_dma_words_raw(stream_fd, completed, irq_count,
+                               sample_count, frame,
+                               frame_words) != 0)
+            goto failure;
+
+        if (print_frames) {
+            printf("DMA armed length readback: 0x%08" PRIx32 "\n",
+                   dma_length_armed);
+            print_dma_debug_words(dma_control, dma_status,
+                                  dma_dst_addr, dma_length);
+            print_core_debug_words(core);
+            print_dma_words(completed, irq_count, sample_count,
+                            frame, frame_words);
+            fflush(stdout);
+        }
     }
 
     reg_write(core, CORE_CONTROL, 0);
     reg_write(dma, S2MM_DMACR, 0);
+    free(frame);
     close(uio_fd);
     return 0;
 
 failure:
     reg_write(core, CORE_CONTROL, 0);
     reg_write(dma, S2MM_DMACR, 0);
+    free(frame);
     close(uio_fd);
     return -1;
 }
