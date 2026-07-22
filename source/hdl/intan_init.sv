@@ -8,7 +8,8 @@ module intan_init #(
     input logic start_init,
 
     // direction of intan_cmd_sequence
-    output logic [6:0] cmd_list_len,
+    input logic [6:0] init_list_len,
+    output logic [6:0] tx_list_len,
     input logic [MAX_COMMANDS * BITS_PER_WORD-1:0] init_cmd_list,  // received from axi
     output logic [MAX_COMMANDS * BITS_PER_WORD-1:0] tx_cmd_list,
     output logic start_init_pulse,
@@ -19,7 +20,8 @@ module intan_init #(
     input logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_b,
     input logic done_seq_pulse,
 
-    output logic done_init
+    output logic done_init,
+    output logic fault
 );
 
     typedef enum logic [1:0] {
@@ -33,7 +35,8 @@ module intan_init #(
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            done_init   <= 1'b0;
+            done_init <= 1'b0;
+            fault <= 1'b0;
             tx_cmd_list <= '0;
         end else begin
             case (init_state)
@@ -52,11 +55,11 @@ module intan_init #(
                             done_init  <= 1'b1;
                         end else begin
                             init_state <= ST_FAULT;
+                            fault <= 1'b1;
                         end
                     end
                 end
                 ST_DONE: begin
-
                 end
                 ST_FAULT: begin
                 end
