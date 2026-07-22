@@ -1,4 +1,5 @@
--sv /home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/hdl/config_pkg.sv
+-v /home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/IP/ctrlsys_core/src/config_pkg.sv
+-v /home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/hdl/config_pkg.sv
 +incdir+/home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/IP/ctrlsys_core/src
 +incdir+/home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/hdl
 +incdir+/home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/tests/hdl
