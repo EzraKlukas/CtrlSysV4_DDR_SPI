@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns / 1ps
 
 import config_pkg::*;
 
@@ -32,7 +32,7 @@ module packet_path_layout_tb;
     logic [AXIS_DATA_WIDTH/8-1:0] axis_keep;
     logic axis_last;
 
-    byte unsigned packet_bytes [0:PACKET_BYTES-1];
+    byte unsigned packet_bytes[0:PACKET_BYTES-1];
     int byte_count = 0;
     int beat_count = 0;
     int packet_done_count = 0;
@@ -58,8 +58,8 @@ module packet_path_layout_tb;
     );
 
     packet_buffer #(
-        .DATA_WIDTH(AXIS_DATA_WIDTH),
-        .DEPTH_WORDS(PACKET_BUFFER_WORDS),
+        .DATA_WIDTH  (AXIS_DATA_WIDTH),
+        .DEPTH_WORDS (PACKET_BUFFER_WORDS),
         .PACKET_WORDS(PACKET_AXIS_WORDS)
     ) u_buffer (
         .clk(clk),
@@ -98,7 +98,7 @@ module packet_path_layout_tb;
             for (sensor = 0; sensor < NUM_INTAN; sensor = sensor + 1) begin
                 intan_frame.Intan_data[sensor].sensor_id = sensor[7:0];
                 for (byte_idx = 0; byte_idx < INTAN_DATA_BYTES; byte_idx = byte_idx + 1)
-                    intan_frame.Intan_data[sensor].data[8*byte_idx +: 8] =
+                intan_frame.Intan_data[sensor].data[8*byte_idx +: 8] =
                         byte'(8'h40 + frame_id + sensor + byte_idx);
             end
         end
@@ -113,8 +113,7 @@ module packet_path_layout_tb;
             for (sensor = 0; sensor < NUM_ICM; sensor = sensor + 1) begin
                 icm_frame.ICM_data[sensor].sensor_id = sensor[7:0];
                 for (byte_idx = 0; byte_idx < ICM_DATA_BYTES; byte_idx = byte_idx + 1)
-                    icm_frame.ICM_data[sensor].data[8*byte_idx +: 8] =
-                        byte'(8'h80 + sensor + byte_idx);
+                icm_frame.ICM_data[sensor].data[8*byte_idx+:8] = byte'(8'h80 + sensor + byte_idx);
             end
         end
     endtask
@@ -140,8 +139,12 @@ module packet_path_layout_tb;
     endtask
 
     function automatic int unsigned be32(input int offset);
-        be32 = {packet_bytes[offset], packet_bytes[offset + 1],
-                packet_bytes[offset + 2], packet_bytes[offset + 3]};
+        be32 = {
+            packet_bytes[offset],
+            packet_bytes[offset+1],
+            packet_bytes[offset+2],
+            packet_bytes[offset+3]
+        };
     endfunction
 
     always_ff @(posedge clk) begin
@@ -150,13 +153,12 @@ module packet_path_layout_tb;
             beat_count <= 0;
             packet_done_count <= 0;
         end else begin
-            if (writer_packet_done)
-                packet_done_count <= packet_done_count + 1;
+            if (writer_packet_done) packet_done_count <= packet_done_count + 1;
 
             if (axis_valid && axis_ready) begin
                 for (int lane = 0; lane < AXIS_BYTES; lane = lane + 1) begin
                     if (byte_count + lane < PACKET_BYTES)
-                        packet_bytes[byte_count + lane] <= axis_data[8*lane +: 8];
+                        packet_bytes[byte_count+lane] <= axis_data[8*lane+:8];
                 end
                 byte_count <= byte_count + AXIS_BYTES;
                 beat_count <= beat_count + 1;
@@ -184,25 +186,24 @@ module packet_path_layout_tb;
             $fatal(1, "expected %0d AXIS beats, got %0d", PACKET_AXIS_WORDS, beat_count);
         if (byte_count != PACKET_BYTES)
             $fatal(1, "expected %0d bytes, got %0d", PACKET_BYTES, byte_count);
-        if (fifo_underflow)
-            $fatal(1, "packet FIFO underflowed");
-        if (fifo_overflow)
-            $fatal(1, "packet FIFO overflowed");
+        if (fifo_underflow) $fatal(1, "packet FIFO underflowed");
+        if (fifo_overflow) $fatal(1, "packet FIFO overflowed");
 
         for (int i = 0; i < 8; i = i + 1) begin
-            if (packet_bytes[PACKET_TRAILER_OFFSET_BYTES + i] !== 8'hff)
-                $fatal(1, "bad trailer magic byte %0d: 0x%02h", i,
-                       packet_bytes[PACKET_TRAILER_OFFSET_BYTES + i]);
+            if (packet_bytes[PACKET_TRAILER_OFFSET_BYTES+i] !== 8'hff)
+                $fatal(
+                    1,
+                    "bad trailer magic byte %0d: 0x%02h",
+                    i,
+                    packet_bytes[PACKET_TRAILER_OFFSET_BYTES+i]
+                );
         end
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 12) != PACKET_TRAILER_BYTES)
-            $fatal(1, "bad trailer_bytes: %0d",
-                   be32(PACKET_TRAILER_OFFSET_BYTES + 12));
+            $fatal(1, "bad trailer_bytes: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 12));
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 16) != PACKET_BYTES)
-            $fatal(1, "bad packet_bytes: %0d",
-                   be32(PACKET_TRAILER_OFFSET_BYTES + 16));
+            $fatal(1, "bad packet_bytes: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 16));
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 40) != PACKET_TRAILER_OFFSET_BYTES)
-            $fatal(1, "bad trailer_start_index: %0d",
-                   be32(PACKET_TRAILER_OFFSET_BYTES + 40));
+            $fatal(1, "bad trailer_start_index: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 40));
 
         $display("PASS packet_path_layout_tb");
         $finish;

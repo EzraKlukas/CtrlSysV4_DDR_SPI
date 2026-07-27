@@ -5,7 +5,7 @@ Description: Abstract orchestrator of arbitrary SPI word transaction with arbitr
 */
 
 module intan_spi_word_engine #(
-    parameter integer SCLK_HALF_PERIOD = 63,
+    parameter integer SCLK_HALF_PERIOD_CYCLES = 63,
     parameter int NUM_INTAN = config_pkg::NUM_INTAN,
     parameter int T_CS_1 = config_pkg::INTAN_T_CS_1,
     parameter int T_CS_2 = config_pkg::INTAN_T_CS_2,
@@ -17,6 +17,7 @@ module intan_spi_word_engine #(
 
     input logic run_cyclic,
     output logic done_pulse,
+    // output logic busy,
     input logic [15:0] tx_word,
 
     output logic [BITS_PER_WORD * NUM_INTAN - 1:0] rx_word_a,
@@ -35,13 +36,15 @@ module intan_spi_word_engine #(
     logic mosi_d;
     logic mosi_q;
 
+    logic sclk_has_risen = 1'b0;
+
     // FSM
     typedef enum logic [2:0] {
         ST_IDLE,
         ST_CS_ASSERT_SETUP,  // wait t_{CS1}: CS low before first SCLK high
         ST_TRANSFER,  // 16 SCLK cycles: drive MOSI, capture DDR MISO
         ST_CS_DEASSERT_SETUP,  // wait t_{CS2}: final SCLK low before CS high
-        ST_CS_HIGH_GAP  // wait t_{CSOFF} before another transaction
+        ST_CS_HIGH_CYCLES  // wait t_{CSOFF} before another transaction
     } intan_spi_state_t;
 
     intan_spi_state_t curr_state;
@@ -55,6 +58,8 @@ module intan_spi_word_engine #(
 
     assign done_pulse = transaction_done;
 
+    assign busy = run_cyclic && !done_pulse;
+
     // data
     logic [BITS_PER_WORD * NUM_INTAN - 1:0] curr_rx_word_a;
     logic [BITS_PER_WORD * NUM_INTAN - 1:0] curr_rx_word_b;
@@ -63,8 +68,8 @@ module intan_spi_word_engine #(
     logic [BITS_PER_WORD * NUM_INTAN - 1:0] next_rx_word_b;
 
     // SPI timing related
-    localparam int SCLK_DIV_CNT_W = (SCLK_HALF_PERIOD > 1) ? $clog2( // might have to change for DDR
-        SCLK_HALF_PERIOD
+    localparam int SCLK_DIV_CNT_W = (SCLK_HALF_PERIOD_CYCLES > 1) ? $clog2( // might have to change for DDR
+        SCLK_HALF_PERIOD_CYCLES
     ) : 1;
 
     logic [SCLK_DIV_CNT_W-1:0] sclk_div_cnt;
@@ -73,10 +78,11 @@ module intan_spi_word_engine #(
     logic sclk_en_q;
     logic sclk_rise_stb;  // serial clock rising strobes (pulses on sclk transition)
     logic sclk_fall_stb;
-    logic [3:0] sclk_cnt;  // probably increase, number of bits / SPI cycle (in SDR).
+    logic [3:0] sclk_cnt = 4'b0;  // probably increase, number of bits / SPI cycle (in SDR).
 
     initial begin
-        if (SCLK_HALF_PERIOD < 1) $error("Intan_reader requires SCLK_HALF_PERIOD_CYCLES >= 1");
+        if (SCLK_HALF_PERIOD_CYCLES < 1)
+            $error("Intan_reader requires SCLK_HALF_PERIOD_CYCLES_CYCLES >= 1");
     end
 
     assign cs_n = cs_n_q;  // _n means active low
@@ -92,11 +98,12 @@ module intan_spi_word_engine #(
             sclk_q <= 1'b0;
             sclk_rise_stb <= 1'b0;
             sclk_fall_stb <= 1'b0;
+            sclk_cnt <= 4'b0;
         end else begin
             sclk_rise_stb <= 1'b0;
             sclk_fall_stb <= 1'b0;
             if (sclk_en_q) begin
-                if (sclk_div_cnt == 6'(SCLK_HALF_PERIOD - 1)) begin
+                if (sclk_div_cnt == SCLK_DIV_CNT_W'(SCLK_HALF_PERIOD_CYCLES - 1)) begin
                     sclk_div_cnt <= '0;
                     sclk_q <= ~sclk_q;
 
@@ -172,7 +179,7 @@ module intan_spi_word_engine #(
                 cs_n_d = 1'b0;  // pull CS low
                 mosi_d = tx_word[15];  // drive MOSI right away.
                 sclk_en_d = 1'b0;
-                if (state_cycles_q == 16'(T_CS_1 - SCLK_HALF_PERIOD)) begin
+                if (state_cycles_q == SCLK_DIV_CNT_W'(T_CS_1 - SCLK_HALF_PERIOD_CYCLES)) begin
                     sclk_en_d  = 1'b1;
                     next_state = ST_TRANSFER;
                 end
@@ -180,6 +187,8 @@ module intan_spi_word_engine #(
 
             ST_TRANSFER: begin
                 if (sclk_fall_stb) begin
+                    sclk_has_risen = 1'b1;
+
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
                         next_rx_word_a[sensor_idx*BITS_PER_WORD+32'(sclk_cnt)] = miso[sensor_idx];
                     end
@@ -191,7 +200,7 @@ module intan_spi_word_engine #(
                         mosi_d = tx_word[sclk_cnt-1];
                     end
                 end
-                if (sclk_rise_stb) begin
+                if (sclk_rise_stb && sclk_has_risen) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
                         next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt)] = miso[sensor_idx];
                     end
@@ -200,18 +209,18 @@ module intan_spi_word_engine #(
 
             ST_CS_DEASSERT_SETUP: begin
                 // take care of B0
-                if (state_cycles_q == 16'(SCLK_HALF_PERIOD)) begin
+                if (state_cycles_q == SCLK_DIV_CNT_W'(SCLK_HALF_PERIOD_CYCLES)) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
                         next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt)] = miso[sensor_idx];
                     end
                 end
 
                 if (transaction_done) begin
-                    next_state = ST_CS_HIGH_GAP;
+                    next_state = ST_CS_HIGH_CYCLES;
                 end
             end
 
-            ST_CS_HIGH_GAP: begin
+            ST_CS_HIGH_CYCLES: begin
                 cs_n_d = 1'b1;
                 if (state_cycles_q == 16'(T_CS_OFF)) begin
                     if (run_cyclic) begin
