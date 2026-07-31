@@ -9,9 +9,9 @@ Description: Streams buffered packet words to AXI Stream.
 import config_pkg::*;
 
 module packet_to_axis #(
-    parameter int DATA_WIDTH = 1024,
-    parameter int PACKET_WORDS = 192,
-    parameter int PACKET_LAST_BYTES = 128
+    parameter int DATA_WIDTH = config_pkg::AXIS_DATA_WIDTH,
+    parameter int PACKET_WORDS = config_pkg::PACKET_AXIS_WORDS,
+    parameter int PACKET_LAST_BYTES = config_pkg::PACKET_LAST_BYTES
 )(
     input  logic                    clk,
     input  logic                    rst,

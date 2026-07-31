@@ -3,11 +3,20 @@ package config_pkg;
     localparam int NUM_ICM = 4;
     localparam int NUM_INTAN = 8;
     localparam int ICM_DATA_BYTES = 20;
-    localparam int INTAN_DATA_BYTES = 64;
     localparam int INTAN_SAMPLING_RATIO = 30;
+    localparam int INTAN_BITS_PER_WORD = 16;
+    localparam int INTAN_CHANNELS = 64;
     localparam int BUFFER_SIZE = 10;
     localparam int AXIS_DATA_WIDTH = 1024;
     localparam int PACKET_BYTES = 24576;
+
+    // Intan SPI timing specifics
+    localparam int INTAN_T_CS_1 = 6;
+    localparam int INTAN_T_CS_2 = 6;
+    localparam int INTAN_T_MOSI = 3;
+    localparam int INTAN_T_MISO = 3;
+    localparam int INTAN_T_CS_OFF = 20;
+    localparam int INTAN_T_SCLK = 3;
 
     // measurement = one sensor's data
     // frame       = all sensors of one type for one read
@@ -20,7 +29,7 @@ package config_pkg;
 
     typedef struct packed {
         logic [7:0] sensor_id;
-        logic [8*INTAN_DATA_BYTES-1:0] data;
+        logic [INTAN_BITS_PER_WORD*INTAN_CHANNELS-1:0] data;
     } Intan_measurement_t;
 
     typedef struct packed {

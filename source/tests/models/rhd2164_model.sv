@@ -29,11 +29,11 @@ module rhd2164_model #(
     parameter time T_MISO = 0ns,
 
     parameter bit CHECK_TIMING = 1'b1,
-    parameter time T_SCLK_HIGH_MIN = 20.8ns,
-    parameter time T_SCLK_LOW_MIN = 20.8ns,
-    parameter time T_CS_TO_SCLK_MIN = 20.8ns,
-    parameter time T_SCLK_TO_CS_MIN = 20.8ns,
-    parameter time T_CS_HIGH_MIN = 154ns,
+    parameter realtime T_SCLK_HIGH_MIN = 20.8ns,
+    parameter realtime T_SCLK_LOW_MIN = 20.8ns,
+    parameter realtime T_CS_TO_SCLK_MIN = 20.8ns,
+    parameter realtime T_SCLK_TO_CS_MIN = 20.8ns,
+    parameter realtime T_CS_HIGH_MIN = 154ns,
 
     // Register 4 controls real-chip behavior while CS is high.  High impedance
     // is the more useful default for catching accidental bus contention.
@@ -42,7 +42,7 @@ module rhd2164_model #(
     input  logic cs_n,
     input  logic sclk,
     input  logic mosi,
-    output wire  miso,
+    output logic miso,
 
     output logic [15:0] captured_command,
     output logic command_valid
@@ -72,8 +72,6 @@ module rhd2164_model #(
     realtime last_sclk_fall;
     bit have_seen_cs_fall;
     bit have_seen_cs_rise;
-
-    logic miso_value;
 
     function automatic logic [15:0] sample_for_channel(input logic [5:0] channel);
         sample_for_channel = SAMPLE_BASE + SENSOR_OFFSET + {10'b0, channel};
@@ -312,23 +310,21 @@ module rhd2164_model #(
      * after a falling edge, the next B bit is presented.  Therefore the bit
      * sampled at an edge is the value held during the phase before that edge.
      */
-    always_comb begin
+    always @(sclk or posedge cs_n) begin
         if (cs_n) begin
-            miso_value = HIGH_Z_WHEN_DESELECTED ? 1'bz : 1'b0;
+            miso <= #(T_MISO) (HIGH_Z_WHEN_DESELECTED ? 1'bz : 1'b0);
+
         end else if (sclk) begin
-            if ((rising_edge_count >= 1) && (rising_edge_count <= 16))
-                miso_value = response_tx_a[16-rising_edge_count];
-            else miso_value = 1'b0;
+            // Rising edge k: falling_edge_count is stably k-1.
+            if (falling_edge_count <= 15) miso <= #(T_MISO) response_tx_a[15-falling_edge_count];
+            else miso <= #(T_MISO) 1'b0;
+
         end else begin
-            if ((falling_edge_count >= 1) && (falling_edge_count <= 16))
-                miso_value = response_tx_b[16-falling_edge_count];
-            else
-                // This value is present at the first rising edge and is
-                // intentionally ignored by a correct RHD2164 controller.
-                miso_value = 1'b0;
+            // Falling edge k: rising_edge_count is stably k.
+            if ((rising_edge_count >= 1) && (rising_edge_count <= 16))
+                miso <= #(T_MISO) response_tx_b[16-rising_edge_count];
+            else miso <= #(T_MISO) 1'b0;
         end
     end
-
-    assign #(T_MISO) miso = miso_value;
 
 endmodule

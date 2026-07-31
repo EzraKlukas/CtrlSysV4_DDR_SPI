@@ -15,7 +15,7 @@ package config_pkg;
     localparam int INTAN_T_CS_2 = 6;
     localparam int INTAN_T_MOSI = 3;
     localparam int INTAN_T_MISO = 3;
-    localparam int INTAN_T_CS_OFF = 10;
+    localparam int INTAN_T_CS_OFF = 20;
     localparam int INTAN_T_SCLK = 3;
 
     // measurement = one sensor's data

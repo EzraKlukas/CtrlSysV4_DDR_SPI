@@ -2,3 +2,6 @@ Vivado_CtrlSysV4/
 source/contraints/
 build/
 .nvim/
+obj_dir/
+obj_dir_debug/
+*.fst

@@ -9,9 +9,9 @@ Description: Synchronous BRAM FIFO for packet stream words.
 import config_pkg::*;
 
 module packet_buffer #(
-    parameter int DATA_WIDTH = 1024,
-    parameter int DEPTH_WORDS = 1920,
-    parameter int PACKET_WORDS = 192
+    parameter int DATA_WIDTH = config_pkg::AXIS_DATA_WIDTH,
+    parameter int DEPTH_WORDS = config_pkg::PACKET_BUFFER_WORDS,
+    parameter int PACKET_WORDS = config_pkg::PACKET_AXIS_WORDS
 )(
     input  logic                    clk,
     input  logic                    rst,

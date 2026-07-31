@@ -87,7 +87,9 @@ proc ctrlsys_copy_sources {hdl_dir destination file_names} {
         set source [file normalize [file join $hdl_dir $file_name]]
         set target [file normalize [file join $destination $file_name]]
         ctrlsys_require_file $source "HDL source"
-        file copy -force $source $target
+        file copy -force \
+            [file join $repo_root source hdl config_pkg.sv] \
+            [file join $repo_root IP ctrlsys_core src config_pkg.sv]
     }
 }
 
@@ -443,7 +445,7 @@ proc ctrlsys_spawn_clean_packager {script_path opts_list} {
 
 set script_path [file normalize [info script]]
 set script_dir [file dirname $script_path]
-set repo_root [file normalize [file join $script_dir .. ..]]
+set repo_root [file normalize [file join [file dirname [info script]] ../..]]
 set opts_list [ctrlsys_parse_args $repo_root]
 array set opts $opts_list
 

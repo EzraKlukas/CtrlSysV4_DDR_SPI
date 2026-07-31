@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-
 /*
 Name: Ezra Klukas
 File: intan_spi_word_engine.sv
@@ -34,11 +32,11 @@ module intan_spi_word_engine #(
 
     // sequential copies of spi lines
     logic cs_n_d;  // next value, computed by combinational logic
-    initial cs_n_q = 1'b1;
     logic cs_n_q;  // current registered value, stored in flip-flop
-    initial cs_n_q = 1'b1;
     logic mosi_d;
     logic mosi_q;
+
+    logic sclk_has_risen = 1'b0;
 
     // FSM
     typedef enum logic [2:0] {
@@ -56,7 +54,7 @@ module intan_spi_word_engine #(
 
     logic transaction_done;
 
-    assign transaction_done = (curr_state == ST_CS_DEASSERT_SETUP) && (state_cycles_q == 16'(T_CS_2));
+    assign transaction_done = (curr_state == ST_CS_DEASSERT_SETUP) && (state_cycles_q == T_CS_2);
 
     assign done_pulse = transaction_done;
 
@@ -74,18 +72,13 @@ module intan_spi_word_engine #(
         SCLK_HALF_PERIOD_CYCLES
     ) : 1;
 
-    logic [SCLK_DIV_CNT_W-1:0] sclk_div_cnt_q;
-    logic [SCLK_DIV_CNT_W-1:0] sclk_div_cnt_d;
+    logic [SCLK_DIV_CNT_W-1:0] sclk_div_cnt;
     logic sclk_q;
-    logic sclk_d;
     logic sclk_en_d;
     logic sclk_en_q;
     logic sclk_rise_stb;  // serial clock rising strobes (pulses on sclk transition)
     logic sclk_fall_stb;
-    logic sclk_has_pulsed_q;  // should be initially set to 1'b0, but is initially set to X!
-    logic sclk_has_pulsed_d;  // should be initially set to 1'b0, but is initially set to X!
-    logic [3:0] sclk_cnt_q;  // probably increase, number of bits / SPI cycle (in SDR).
-    logic [3:0] sclk_cnt_d;  // probably increase, number of bits / SPI cycle (in SDR).
+    logic [3:0] sclk_cnt = 4'b0;  // probably increase, number of bits / SPI cycle (in SDR).
 
     initial begin
         if (SCLK_HALF_PERIOD_CYCLES < 1)
@@ -101,54 +94,33 @@ module intan_spi_word_engine #(
     // SCLK generator
     always_ff @(posedge clk) begin
         if (rst) begin
-            sclk_div_cnt_q <= '0;
+            sclk_div_cnt <= '0;
             sclk_q <= 1'b0;
-            sclk_cnt_q <= 4'b0;
-            sclk_has_pulsed_q <= 1'b0;
+            sclk_rise_stb <= 1'b0;
+            sclk_fall_stb <= 1'b0;
+            sclk_cnt <= 4'b0;
         end else begin
-            sclk_cnt_q <= sclk_cnt_d;
-            sclk_div_cnt_q <= sclk_div_cnt_d;
-            sclk_q <= sclk_d;
-            sclk_has_pulsed_q <= sclk_has_pulsed_d;
-        end
-    end
+            sclk_rise_stb <= 1'b0;
+            sclk_fall_stb <= 1'b0;
+            if (sclk_en_q) begin
+                if (sclk_div_cnt == SCLK_DIV_CNT_W'(SCLK_HALF_PERIOD_CYCLES - 1)) begin
+                    sclk_div_cnt <= '0;
+                    sclk_q <= ~sclk_q;
 
-    always_comb begin
-        sclk_d = sclk_q;
-        sclk_rise_stb = 1'b0;
-        sclk_fall_stb = 1'b0;
-        sclk_div_cnt_d = sclk_div_cnt_q;
-        sclk_cnt_d = sclk_cnt_q;
-        sclk_has_pulsed_d = sclk_has_pulsed_q;
-
-        // sclk_rise_stb and sclk_fall_stb should be calculated in here?
-        if (sclk_en_q) begin
-            if (sclk_div_cnt_q == SCLK_DIV_CNT_W'(SCLK_HALF_PERIOD_CYCLES - 1) && (sclk_cnt_d != 0 || !sclk_has_pulsed_q)) begin
-                sclk_div_cnt_d = '0;
-                sclk_d = ~sclk_q;
-
-                if (sclk_q == 1'b0) begin
-                    sclk_rise_stb = 1'b1;
+                    if (sclk_q == 1'b0) begin
+                        sclk_rise_stb <= 1'b1;
+                    end else begin
+                        sclk_fall_stb <= 1'b1;
+                        sclk_cnt <= sclk_cnt - 1;
+                    end
                 end else begin
-                    sclk_fall_stb = 1'b1;
-                    sclk_cnt_d = sclk_cnt_q - 1;
-                    sclk_has_pulsed_d = 1'b1;
+                    sclk_div_cnt <= sclk_div_cnt + 1'b1;
                 end
             end else begin
-                sclk_div_cnt_d = sclk_div_cnt_q + 1'b1;
-                if (sclk_div_cnt_d == 1) begin
-                    if (sclk_q == 1'b0 && sclk_has_pulsed_d) begin
-                        sclk_fall_stb = 1'b1;
-                    end else begin
-                        sclk_rise_stb = 1'b1;
-                    end
-                end
+                sclk_div_cnt <= '0;
+                sclk_cnt <= BITS_PER_WORD - 1;
+                sclk_q <= 1'b0;  // Intan SCLK idle/base value is zero.
             end
-        end else begin
-            sclk_div_cnt_d = '0;
-            sclk_cnt_d = '0;  // was the fix to a problem! Previously initially set to F.
-            sclk_d = 1'b0;  // Intan SCLK idle/base value is zero.
-            sclk_has_pulsed_d = 1'b0;
         end
     end
 
@@ -162,7 +134,7 @@ module intan_spi_word_engine #(
             state_cycles_q <= '0;
 
             sclk_en_q <= 1'b0;
-            cs_n_q <= 1'b1; // don't worry I'll fix back, for testbench purposes easiest to also set initial value.
+            cs_n_q <= 1'b1;
             mosi_q <= 1'b0;
         end else begin
             curr_state <= next_state;
@@ -200,9 +172,6 @@ module intan_spi_word_engine #(
                 // Only next possible curr_state is ST_CS_ASSERT_SETUP.
                 if (run_cyclic) begin
                     next_state = ST_CS_ASSERT_SETUP;
-                    cs_n_d = 1'b0;  // pull CS low
-                    mosi_d = tx_word[15];  // drive MOSI right away.
-                    sclk_en_d = 1'b0;
                 end
             end
 
@@ -210,40 +179,39 @@ module intan_spi_word_engine #(
                 cs_n_d = 1'b0;  // pull CS low
                 mosi_d = tx_word[15];  // drive MOSI right away.
                 sclk_en_d = 1'b0;
-                if (state_cycles_q == 16'(T_CS_1 - SCLK_HALF_PERIOD_CYCLES)) begin
+                if (state_cycles_q == SCLK_DIV_CNT_W'(T_CS_1 - SCLK_HALF_PERIOD_CYCLES)) begin
                     sclk_en_d  = 1'b1;
                     next_state = ST_TRANSFER;
                 end
             end
 
             ST_TRANSFER: begin
-                if (sclk_fall_stb) begin  // this never happens!
-                    if (sclk_q == 1'b0) begin
-                        for (
-                            sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1
-                        ) begin
-                            next_rx_word_a[sensor_idx*BITS_PER_WORD+32'(sclk_cnt_q)] = miso[sensor_idx];
-                        end
-                        if (sclk_cnt_q == 0) begin
-                            next_state = ST_CS_DEASSERT_SETUP;
-                            sclk_en_d  = 1'b0;
-                        end
+                if (sclk_fall_stb) begin
+                    sclk_has_risen = 1'b1;
+
+                    for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
+                        next_rx_word_a[sensor_idx*BITS_PER_WORD+32'(sclk_cnt)] = miso[sensor_idx];
+                    end
+
+                    if (sclk_cnt == 0) begin
+                        next_state = ST_CS_DEASSERT_SETUP;
+                        sclk_en_d  = 1'b0;
                     end else begin
-                        mosi_d = tx_word[sclk_cnt_d-1];
+                        mosi_d = tx_word[sclk_cnt-1];
                     end
                 end
-                if (sclk_rise_stb && sclk_has_pulsed_q) begin
+                if (sclk_rise_stb && sclk_has_risen) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                        next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt_q)] = miso[sensor_idx];
+                        next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt)] = miso[sensor_idx];
                     end
                 end
             end
 
             ST_CS_DEASSERT_SETUP: begin
                 // take care of B0
-                if (state_cycles_q == 16'(SCLK_HALF_PERIOD_CYCLES)) begin
+                if (state_cycles_q == SCLK_DIV_CNT_W'(SCLK_HALF_PERIOD_CYCLES)) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                        next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt_q)] = miso[sensor_idx];
+                        next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt)] = miso[sensor_idx];
                     end
                 end
 
@@ -254,7 +222,7 @@ module intan_spi_word_engine #(
 
             ST_CS_HIGH_CYCLES: begin
                 cs_n_d = 1'b1;
-                if (state_cycles_q >= 16'(T_CS_OFF)) begin
+                if (state_cycles_q == 16'(T_CS_OFF)) begin
                     if (run_cyclic) begin
                         next_state = ST_CS_ASSERT_SETUP;
                     end else begin
