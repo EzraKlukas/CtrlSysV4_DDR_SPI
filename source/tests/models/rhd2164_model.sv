@@ -42,7 +42,7 @@ module rhd2164_model #(
     input  logic cs_n,
     input  logic sclk,
     input  logic mosi,
-    output logic miso,
+    output wire  miso,
 
     output logic [15:0] captured_command,
     output logic command_valid
@@ -295,36 +295,22 @@ module rhd2164_model #(
         end
     end
 
-    /*
-     * DDR ordering:
-     *
-     *   first SCLK rising edge : ignored by the controller
-     *   first SCLK falling edge: A[15]
-     *   second rising edge     : B[15]
-     *   second falling edge    : A[14]
-     *   ...
-     *   sixteenth falling edge: A[0]
-     *   rising edge of CS      : B[0]
-     *
-     * While SCLK is high, the next A bit is presented.  While SCLK is low
-     * after a falling edge, the next B bit is presented.  Therefore the bit
-     * sampled at an edge is the value held during the phase before that edge.
-     */
-    always @(sclk or posedge cs_n) begin
-        if (cs_n) begin
-            miso <= #(T_MISO) (HIGH_Z_WHEN_DESELECTED ? 1'bz : 1'b0);
+    logic miso_data;
 
-        end else if (sclk) begin
-            // Rising edge k: falling_edge_count is stably k-1.
-            if (falling_edge_count <= 15) miso <= #(T_MISO) response_tx_a[15-falling_edge_count];
-            else miso <= #(T_MISO) 1'b0;
+    always_comb begin
+        // Keep the internal data path free of high-impedance values.
+        miso_data = 1'b0;
 
-        end else begin
-            // Falling edge k: rising_edge_count is stably k.
+        if (!cs_n && sclk) begin
+            if (falling_edge_count <= 15) miso_data = response_tx_a[15-falling_edge_count];
+
+        end else if (!cs_n) begin
             if ((rising_edge_count >= 1) && (rising_edge_count <= 16))
-                miso <= #(T_MISO) response_tx_b[16-rising_edge_count];
-            else miso <= #(T_MISO) 1'b0;
+                miso_data = response_tx_b[16-rising_edge_count];
         end
     end
+
+    // Apply high impedance only at the actual output net.
+    assign #(T_MISO) miso = (cs_n && HIGH_Z_WHEN_DESELECTED) ? 1'bz : miso_data;
 
 endmodule
