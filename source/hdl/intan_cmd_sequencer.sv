@@ -45,7 +45,7 @@ module intan_cmd_sequencer #(
             if (done_pulse) begin  // only runs once?
                 cmd_cnt <= cmd_cnt + 1;
 
-                if (cmd_cnt + 1 < cmd_list_len) begin
+                if (cmd_cnt - 2 < cmd_list_len) begin
                     if (cmd_cnt >= 2) begin
                         // read from rx, check endianness
                         for (
@@ -55,16 +55,16 @@ module intan_cmd_sequencer #(
                             rx_ans_list_b[((16'(cmd_cnt-2)*NUM_INTAN)+sensor_idx)*BITS_PER_WORD-1-:BITS_PER_WORD] <= rx_ans_b[sensor_idx*BITS_PER_WORD-1-:BITS_PER_WORD];
                         end
                     end
-                    tx_word <= tx_cmd_list[16'(cmd_cnt+1)*BITS_PER_WORD-:BITS_PER_WORD];
-                end else begin  // means we've transmitted every word.
-                    if (cmd_cnt + 1 == cmd_list_len + 2) begin
+                    tx_word <= tx_cmd_list[16'(cmd_cnt+1)*BITS_PER_WORD-1-:BITS_PER_WORD];
+
+                    if (cmd_cnt - 2 == cmd_list_len - 1) begin
                         run_cyclic <= 1'b0;
                         done_seq_pulse <= 1'b1;
                         running_sequence <= 1'b0;
                     end
                 end
             end else if (cmd_cnt == '0) begin
-                tx_word <= tx_cmd_list[BITS_PER_WORD-:BITS_PER_WORD];
+                tx_word <= tx_cmd_list[BITS_PER_WORD-1:0];
                 run_cyclic <= 1'b1;  // ignites SPI word engine.
             end
         end

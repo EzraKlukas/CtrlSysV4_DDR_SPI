@@ -198,7 +198,7 @@ module intan_spi_word_engine #(
                 sclk_en_d = 1'b0;  // disabled sclk (so shouldn't drive sclk_q?)
 
                 // Only next possible curr_state is ST_CS_ASSERT_SETUP.
-                if (run_cyclic) begin
+                if (run_cyclic && state_cycles_q >= 16'(T_CS_OFF)) begin
                     next_state = ST_CS_ASSERT_SETUP;
                     cs_n_d = 1'b0;  // pull CS low
                     mosi_d = tx_word[15];  // drive MOSI right away.
@@ -262,7 +262,6 @@ module intan_spi_word_engine #(
                     end
                 end
             end
-
             default: begin
             end
         endcase
