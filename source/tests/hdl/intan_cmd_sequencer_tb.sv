@@ -6,7 +6,7 @@ module intan_cmd_sequencer_tb;
     localparam time CLK_PERIOD = 8ns;
 
     localparam int MAX_COMMANDS = 64;
-    localparam int NUM_INTAN = 2;
+    localparam int NUM_INTAN = 8;
     localparam int BITS_PER_WORD = 16;
 
     localparam int SCLK_HALF_PERIOD_CYCLES = 3;
@@ -100,33 +100,26 @@ module intan_cmd_sequencer_tb;
         .cs_n(cs_n)
     );
 
-    rhd2164_model #(
-        .SENSOR_ID(0),
-        .T_MISO(T_MISO_MAX),
-        .CHECK_TIMING(1'b1)
-    ) sensor_0 (
-        .cs_n(cs_n),
-        .sclk(sclk),
-        .mosi(mosi),
-        .miso(miso[0]),
-        .captured_command(captured_command_0),
-        .command_valid(command_valid_0)
-    );
+    genvar i;
 
-    rhd2164_model #(
-        .SENSOR_ID(1),
-        .T_MISO(T_MISO_MAX),
-        .CHECK_TIMING(1'b1)
-    ) sensor_1 (
-        .cs_n(cs_n),
-        .sclk(sclk),
-        .mosi(mosi),
-        .miso(miso[1]),
-        .captured_command(captured_command_1),
-        .command_valid(command_valid_1)
-    );
-
-    // now on to behaviour / helper functions?
+    generate
+        for (i = 0; i < NUM_INTAN; i = i + 1) begin : intan_gen
+            logic [15:0] captured_command;
+            logic command_valid;
+            rhd2164_model #(
+                .SENSOR_ID(i),
+                .T_MISO(T_MISO_MAX),
+                .CHECK_TIMING(1'b1)
+            ) sensor (
+                .cs_n(cs_n),
+                .sclk(sclk),
+                .mosi(mosi),
+                .miso(miso[i]),
+                .captured_command(captured_command),
+                .command_valid(command_valid)
+            );
+        end
+    endgenerate
 
     task automatic fail(input string message);
         $fatal(1, "%0t: %s", $realtime, message);
