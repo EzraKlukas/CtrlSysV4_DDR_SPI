@@ -23,8 +23,6 @@ module intan_cmd_sequencer_tb;
     localparam logic [15:0] SENSOR_0_EXPECT_A = 16'h101F;
     localparam logic [15:0] SENSOR_0_EXPECT_B = 16'h103F;
 
-    localparam int CMD_LIST_WIDTH = MAX_COMMANDS * BITS_PER_WORD;
-
     logic clk;
 
     initial clk = 1'b0;
@@ -38,13 +36,13 @@ module intan_cmd_sequencer_tb;
     logic done_seq_pulse;
     logic [15:0] tx_word;
     logic [6:0] cmd_list_len = 0;
-    logic [MAX_COMMANDS * BITS_PER_WORD-1:0] tx_cmd_list;
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_a;
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_b;
+    logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] tx_cmd_list;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_a;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_b;
 
     // spi_word_engine
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] rx_word_a;
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_b;
     logic sclk;
     logic mosi;
     wire [NUM_INTAN-1:0] miso;
@@ -132,9 +130,9 @@ module intan_cmd_sequencer_tb;
     task automatic run_command_list_test(input int command_count);
         if (command_count <= MAX_COMMANDS) begin
             // construct tx_cmd_list as well as associated rx expected lists.
-            logic [CMD_LIST_WIDTH-1:0] cmd_list = '0;
-            logic [NUM_INTAN * CMD_LIST_WIDTH-1:0] rx_list_expect_a = '0;
-            logic [NUM_INTAN * CMD_LIST_WIDTH-1:0] rx_list_expect_b = '0;
+            logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] cmd_list = '0;
+            logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_list_expect_a = '0;
+            logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_list_expect_b = '0;
 
             logic [15:0] SAMPLE_BASE = 16'h1000;
 
@@ -142,12 +140,12 @@ module intan_cmd_sequencer_tb;
                 logic [15:0] convert_channel_cmd_idx = {2'b0, 6'(cmd_idx - 1), 8'b0};
                 logic [15:0] rx_expect = SAMPLE_BASE + {10'b0, 6'(cmd_idx - 1)};
 
-                cmd_list[cmd_idx*BITS_PER_WORD-1-:BITS_PER_WORD] = convert_channel_cmd_idx;
+                cmd_list[cmd_idx-1] = convert_channel_cmd_idx;
 
                 for (int intan_idx = 0; intan_idx < NUM_INTAN; intan_idx = intan_idx + 1) begin
                     logic [15:0] sensor_offset = intan_idx * 16'h0100;
-                    rx_list_expect_a[((cmd_idx-1) * NUM_INTAN + intan_idx + 1) * BITS_PER_WORD - 1 -: BITS_PER_WORD] = sensor_offset + rx_expect;
-                    rx_list_expect_b[((cmd_idx-1) * NUM_INTAN + intan_idx + 1) * BITS_PER_WORD - 1 -: BITS_PER_WORD] = sensor_offset + rx_expect + 16'h0020;
+                    rx_list_expect_a[cmd_idx-1][intan_idx] = sensor_offset + rx_expect;
+                    rx_list_expect_b[cmd_idx-1][intan_idx] = sensor_offset + rx_expect + 16'h0020;
                 end
             end
 

@@ -15,13 +15,13 @@ module intan_cmd_sequencer #(
     output logic done_seq_pulse,
 
     output logic [15:0] tx_word,
-    input logic [NUM_INTAN * BITS_PER_WORD - 1:0] rx_ans_a,
-    input logic [NUM_INTAN * BITS_PER_WORD - 1:0] rx_ans_b,
+    input logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_a,
+    input logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_b,
 
     input logic [6:0] cmd_list_len,
-    input logic [MAX_COMMANDS * BITS_PER_WORD-1:0] tx_cmd_list,
-    output logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_a,
-    output logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_b
+    input logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] tx_cmd_list,
+    output logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_a,
+    output logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_b
 );
 
     logic [6:0] cmd_cnt;
@@ -49,13 +49,13 @@ module intan_cmd_sequencer #(
                     if (cmd_cnt >= 2) begin
                         // read from rx, check endianness
                         for (
-                            sensor_idx = 1; sensor_idx <= NUM_INTAN; sensor_idx = sensor_idx + 1
+                            sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1
                         ) begin
-                            rx_ans_list_a[((16'(cmd_cnt-2)*NUM_INTAN)+sensor_idx)*BITS_PER_WORD-1-:BITS_PER_WORD] <= rx_ans_a[sensor_idx*BITS_PER_WORD-1-:BITS_PER_WORD];
-                            rx_ans_list_b[((16'(cmd_cnt-2)*NUM_INTAN)+sensor_idx)*BITS_PER_WORD-1-:BITS_PER_WORD] <= rx_ans_b[sensor_idx*BITS_PER_WORD-1-:BITS_PER_WORD];
+                            rx_ans_list_a[cmd_cnt-2][sensor_idx] <= rx_ans_a[sensor_idx];
+                            rx_ans_list_b[cmd_cnt-2][sensor_idx] <= rx_ans_b[sensor_idx];
                         end
                     end
-                    tx_word <= tx_cmd_list[16'(cmd_cnt+1)*BITS_PER_WORD-:BITS_PER_WORD];
+                    tx_word <= tx_cmd_list[cmd_cnt];
                 end else begin  // means we've transmitted every word.
                     if (cmd_cnt + 1 == cmd_list_len + 2) begin
                         run_cyclic <= 1'b0;
@@ -64,7 +64,7 @@ module intan_cmd_sequencer #(
                     end
                 end
             end else if (cmd_cnt == '0) begin
-                tx_word <= tx_cmd_list[BITS_PER_WORD-:BITS_PER_WORD];
+                tx_word <= tx_cmd_list[0];
                 run_cyclic <= 1'b1;  // ignites SPI word engine.
             end
         end

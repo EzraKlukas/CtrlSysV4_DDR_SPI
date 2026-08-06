@@ -22,8 +22,8 @@ module intan_spi_word_engine #(
     // output logic busy,
     input logic [15:0] tx_word,
 
-    output logic [BITS_PER_WORD * NUM_INTAN - 1:0] rx_word_a,
-    output logic [BITS_PER_WORD * NUM_INTAN - 1:0] rx_word_b,
+    output logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_a,
+    output logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_b,
 
     // SPI lines
     output logic sclk,
@@ -63,11 +63,11 @@ module intan_spi_word_engine #(
     // assign busy = run_cyclic && !done_pulse;
 
     // data
-    logic [BITS_PER_WORD * NUM_INTAN - 1:0] curr_rx_word_a;
-    logic [BITS_PER_WORD * NUM_INTAN - 1:0] curr_rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] curr_rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] curr_rx_word_b;
 
-    logic [BITS_PER_WORD * NUM_INTAN - 1:0] next_rx_word_a;
-    logic [BITS_PER_WORD * NUM_INTAN - 1:0] next_rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] next_rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] next_rx_word_b;
 
     // SPI timing related
     localparam int SCLK_DIV_CNT_W = (SCLK_HALF_PERIOD_CYCLES > 1) ? $clog2( // might have to change for DDR
@@ -222,7 +222,7 @@ module intan_spi_word_engine #(
                         for (
                             sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1
                         ) begin
-                            next_rx_word_a[sensor_idx*BITS_PER_WORD+32'(sclk_cnt_q)] = miso[sensor_idx];
+                            next_rx_word_a[sensor_idx][sclk_cnt_q] = miso[sensor_idx];
                         end
                         if (sclk_cnt_q == 0) begin
                             next_state = ST_CS_DEASSERT_SETUP;
@@ -234,7 +234,7 @@ module intan_spi_word_engine #(
                 end
                 if (sclk_rise_stb && sclk_has_pulsed_q) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                        next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt_q)] = miso[sensor_idx];
+                        next_rx_word_b[sensor_idx][sclk_cnt_q] = miso[sensor_idx];
                     end
                 end
             end
@@ -243,7 +243,7 @@ module intan_spi_word_engine #(
                 // take care of B0
                 if (state_cycles_q == 16'(SCLK_HALF_PERIOD_CYCLES)) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                        next_rx_word_b[sensor_idx*BITS_PER_WORD+32'(sclk_cnt_q)] = miso[sensor_idx];
+                        next_rx_word_b[sensor_idx][sclk_cnt_q] = miso[sensor_idx];
                     end
                 end
 

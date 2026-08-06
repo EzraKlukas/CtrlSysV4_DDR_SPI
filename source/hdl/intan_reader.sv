@@ -13,7 +13,7 @@
  */
 
 module intan_reader #(
-    parameter int MAX_COMMANDS = 64,
+    parameter int MAX_COMMANDS = 34,
     parameter int NUM_INTAN = config_pkg::NUM_INTAN,
     parameter int NUM_CHANNELS_PER_ADC = config_pkg::INTAN_CHANNELS / 2,
     parameter int BITS_PER_WORD = config_pkg::INTAN_BITS_PER_WORD,
@@ -34,13 +34,13 @@ module intan_reader #(
 
     // Initialization sequence and expected pipelined responses.
     input logic [6:0] init_list_len,
-    input logic [MAX_COMMANDS*BITS_PER_WORD-1:0] init_cmd_list,
-    input logic [MAX_COMMANDS*NUM_INTAN*BITS_PER_WORD-1:0] expect_rx_ans_list_a,
-    input logic [MAX_COMMANDS*NUM_INTAN*BITS_PER_WORD-1:0] expect_rx_ans_list_b,
+    input logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] init_cmd_list,
+    input logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] expect_rx_ans_list_a,
+    input logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] expect_rx_ans_list_b,
 
     // Acquisition sequence.
     input logic [6:0] acq_list_len,
-    input logic [MAX_COMMANDS*BITS_PER_WORD-1:0] acq_cmd_list,
+    input logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] acq_cmd_list,
 
     // Completed frame and status.
     output config_pkg::Intan_frame_t intan_frame,
@@ -55,24 +55,20 @@ module intan_reader #(
     input logic [NUM_INTAN-1:0] intan_miso
 );
 
-    localparam int COMMAND_LIST_BITS = MAX_COMMANDS * BITS_PER_WORD;
-    localparam int RESPONSE_LIST_BITS = MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD;
-    localparam int RESPONSE_WORD_BITS = NUM_INTAN * BITS_PER_WORD;
-
     // Acquisition engine <-> command sequencer.
     logic [6:0] command_list_len;
-    logic [COMMAND_LIST_BITS-1:0] command_list;
+    logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] command_list;
     logic start_sequence_pulse;
     logic sequence_done_pulse;
-    logic [RESPONSE_LIST_BITS-1:0] response_list_a;
-    logic [RESPONSE_LIST_BITS-1:0] response_list_b;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] response_list_a;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] response_list_b;
 
     // Command sequencer <-> SPI word engine.
     logic run_words;
     logic word_done_pulse;
     logic [BITS_PER_WORD-1:0] tx_word;
-    logic [RESPONSE_WORD_BITS-1:0] rx_word_a;
-    logic [RESPONSE_WORD_BITS-1:0] rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_b;
 
     intan_acq_engine #(
         .MAX_COMMANDS(MAX_COMMANDS),

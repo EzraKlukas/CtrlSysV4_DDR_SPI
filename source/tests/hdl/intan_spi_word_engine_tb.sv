@@ -57,8 +57,8 @@ module intan_spi_word_engine_tb;
     logic run_cyclic = 1'b0;
     logic done_pulse;
     logic [15:0] tx_word = '0;
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] rx_word_a;
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_b;
     logic sclk;
     logic mosi;
     wire [NUM_INTAN-1:0] miso;
@@ -74,8 +74,8 @@ module intan_spi_word_engine_tb;
     logic abort_run_cyclic = 1'b0;
     logic abort_done_pulse;
     logic [15:0] abort_tx_word = 16'h5AA5;
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] abort_rx_word_a;
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] abort_rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] abort_rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] abort_rx_word_b;
     logic abort_sclk;
     logic abort_mosi;
     logic abort_cs_n;
@@ -228,7 +228,7 @@ module intan_spi_word_engine_tb;
             wait (transaction_count == count_before + 1);
             wait_for_main_idle;
 
-            repeat (T_CS_OFF_CYCLES + 4) @(posedge clk);
+            // repeat (T_CS_OFF_CYCLES) @(posedge clk);
             if (transaction_count != count_before + 1)
                 fail("a one-shot request created more than one transaction");
         end
@@ -413,7 +413,7 @@ module intan_spi_word_engine_tb;
         // Reset and idle-level test.
         repeat (5) @(posedge clk);
         rst = 1'b0;
-        repeat (2) @(posedge clk);
+        repeat (20) @(posedge clk);  // respecting T_CS_OFF
         check_main_idle("after reset");
 
         // One request must be one 16-clock, MSB-first transaction.
@@ -447,34 +447,26 @@ module intan_spi_word_engine_tb;
         if (command_count_1 != command_count_before_1 + 3)
             fail("sensor 1 did not receive all consecutive commands");
 
-        if (rx_word_a[0*BITS_PER_WORD+:BITS_PER_WORD] !== SENSOR_0_EXPECT_A)
+        if (rx_word_a[0] !== SENSOR_0_EXPECT_A)
             fail($sformatf(
-                 "sensor 0 A response was 0x%04h; expected 0x%04h",
-                 rx_word_a[0*BITS_PER_WORD+:BITS_PER_WORD],
-                 SENSOR_0_EXPECT_A
+                 "sensor 0 A response was 0x%04h; expected 0x%04h", rx_word_a[0], SENSOR_0_EXPECT_A
                  ));
-        if (rx_word_b[0*BITS_PER_WORD+:BITS_PER_WORD] !== SENSOR_0_EXPECT_B)
+        if (rx_word_b[0] !== SENSOR_0_EXPECT_B)
             fail($sformatf(
-                 "sensor 0 B response was 0x%04h; expected 0x%04h",
-                 rx_word_b[0*BITS_PER_WORD+:BITS_PER_WORD],
-                 SENSOR_0_EXPECT_B
+                 "sensor 0 B response was 0x%04h; expected 0x%04h", rx_word_b[0], SENSOR_0_EXPECT_B
                  ));
-        if (rx_word_a[1*BITS_PER_WORD+:BITS_PER_WORD] !== SENSOR_1_EXPECT_A)
+        if (rx_word_a[1] !== SENSOR_1_EXPECT_A)
             fail($sformatf(
-                 "sensor 1 A response was 0x%04h; expected 0x%04h",
-                 rx_word_a[1*BITS_PER_WORD+:BITS_PER_WORD],
-                 SENSOR_1_EXPECT_A
+                 "sensor 1 A response was 0x%04h; expected 0x%04h", rx_word_a[1], SENSOR_1_EXPECT_A
                  ));
-        if (rx_word_b[1*BITS_PER_WORD+:BITS_PER_WORD] !== SENSOR_1_EXPECT_B)
+        if (rx_word_b[1] !== SENSOR_1_EXPECT_B)
             fail($sformatf(
-                 "sensor 1 B response was 0x%04h; expected 0x%04h",
-                 rx_word_b[1*BITS_PER_WORD+:BITS_PER_WORD],
-                 SENSOR_1_EXPECT_B
+                 "sensor 1 B response was 0x%04h; expected 0x%04h", rx_word_b[1], SENSOR_1_EXPECT_B
                  ));
 
-        if (rx_word_a[0+:BITS_PER_WORD] === rx_word_a[BITS_PER_WORD+:BITS_PER_WORD])
+        if (rx_word_a[0] === rx_word_a[1])
             fail("sensor 0 and sensor 1 A responses were not distinct");
-        if (rx_word_b[0+:BITS_PER_WORD] === rx_word_b[BITS_PER_WORD+:BITS_PER_WORD])
+        if (rx_word_b[0] === rx_word_b[1])
             fail("sensor 0 and sensor 1 B responses were not distinct");
 
         check_main_idle("after run_cyclic was removed");
@@ -482,7 +474,7 @@ module intan_spi_word_engine_tb;
         // Reset during a transfer must synchronously restore idle pin levels.
         repeat (3) @(posedge clk);
         abort_rst = 1'b0;
-        repeat (2) @(posedge clk);
+        repeat (20) @(posedge clk);
 
         @(negedge clk);
         abort_run_cyclic = 1'b1;

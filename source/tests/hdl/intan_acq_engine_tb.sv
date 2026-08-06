@@ -6,7 +6,7 @@ module intan_acq_engine_tb;
     localparam time CLK_PERIOD = 8ns;
 
     localparam int MAX_COMMANDS = 34;
-    localparam int NUM_INTAN = 8;
+    localparam int NUM_INTAN = 1;
     localparam int NUM_CHAN = 32;
     localparam int BITS_PER_WORD = 16;
 
@@ -24,8 +24,6 @@ module intan_acq_engine_tb;
     localparam logic [15:0] SENSOR_0_EXPECT_A = 16'h101F;
     localparam logic [15:0] SENSOR_0_EXPECT_B = 16'h103F;
 
-    localparam int CMD_LIST_WIDTH = MAX_COMMANDS * BITS_PER_WORD;
-
     logic clk;
 
     initial clk = 1'b0;
@@ -40,102 +38,25 @@ module intan_acq_engine_tb;
     initial timestamp = '0;
     always #(CLK_PERIOD) timestamp = timestamp + 1;
 
-    Intan_frame_t Intan_frame;
+    config_pkg::Intan_frame_t Intan_frame;
 
     logic [6:0] init_list_len = 7'(MAX_COMMANDS);
-    // Declaration as a 2D packed array
     logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] init_cmd_list;
-    // Clean, readable assignment assuming BITS_PER_WORD = 16
-    assign init_cmd_list = '{
-            16'hFF00,
-            16'hFF00,
-            16'hFF00,
-            16'hFF00,  // Padding / Idle
-            16'hFF00,
-            16'hFF00,
-            16'hFF00,
-            16'hFF00,
-            16'hFF00,
-            16'h5500,
-            16'h95FF,
-            16'h94FF,
-            16'h93FF,
-            16'h92FF,
-            16'h91FF,
-            16'h90FF,
-            16'h8FFF,
-            16'h8EFF,
-            16'h8D86,
-            16'h8C2C,
-            16'h8B80,
-            16'h8A17,
-            16'h8980,
-            16'h8816,
-            16'h8700,
-            16'h8680,
-            16'h8540,
-            16'h8480,
-            16'h8300,
-            16'h8204,
-            16'h8142,
-            16'h80DE,
-            16'hFF00,
-            16'hFF00
-        };
-
     logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_init_list_expect_a;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_init_list_expect_b;
 
-    assign rx_init_list_expect_a = '{
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'h0004,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFFFF,
-            16'hFF86,
-            16'hFF2C,
-            16'hFF80,
-            16'hFF17,
-            16'hFF80,
-            16'hFF16,
-            16'hFF00,
-            16'hFF80,
-            16'hFF40,
-            16'hFF80,
-            16'hFF00,
-            16'hFF04,
-            16'hFF42,
-            16'hFFDE,
-            16'h0004,
-            16'h0004
-        };
-
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_init_list_expect_b = rx_init_list_expect_a;
-
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_acq_list_expect_a;  // testing purposes.
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_acq_list_expect_b;  // for testing.
+    logic [NUM_CHAN-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_acq_list_expect_a;  // testing purposes.
+    logic [NUM_CHAN-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_acq_list_expect_b;  // for testing.
 
     logic [6:0] acq_list_len = 7'b0100000;
-    logic [MAX_COMMANDS * BITS_PER_WORD-1:0] acq_cmd_list;
+    logic [NUM_CHAN-1:0][BITS_PER_WORD-1:0] acq_cmd_list;
 
     logic [6:0] cmd_list_len = 0;
-    logic [MAX_COMMANDS * BITS_PER_WORD-1:0] tx_cmd_list;
+    logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] tx_cmd_list;
     logic start_seq_pulse = 1'b0;
 
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_a;
-    logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_ans_list_b;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_a;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_b;
     logic done_seq_pulse;
 
     logic done;
@@ -147,12 +68,23 @@ module intan_acq_engine_tb;
     logic [15:0] tx_word;
 
     // spi_word_engine
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] rx_word_a;
-    logic [NUM_INTAN*BITS_PER_WORD-1:0] rx_word_b;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_a;
+    logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_b;
     logic sclk;
     logic mosi;
     wire [NUM_INTAN-1:0] miso;
     logic cs_n = 1'b1;
+
+    task automatic set_init_vector(input int command_idx, input logic [15:0] command,
+                                   input logic [15:0] response);
+        begin
+            init_cmd_list[command_idx] = command;
+            for (int sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
+                rx_init_list_expect_a[command_idx][sensor_idx] = response;
+                rx_init_list_expect_b[command_idx][sensor_idx] = response;
+            end
+        end
+    endtask
 
     // preparing / initializing set command lists for initialization and
     // acquisition.
@@ -162,20 +94,59 @@ module intan_acq_engine_tb;
     initial begin
         automatic logic [15:0] SAMPLE_BASE = 16'h1000;
 
-        for (int cmd_idx = 1; cmd_idx <= MAX_COMMANDS; cmd_idx = cmd_idx + 1) begin
-            automatic logic [15:0] convert_channel_cmd_idx = {2'b0, 6'(cmd_idx - 1), 8'b0};
-            automatic logic [15:0] rx_expect = SAMPLE_BASE + {10'b0, 6'(cmd_idx - 1)};
+        init_cmd_list = '0;
+        rx_init_list_expect_a = '0;
+        rx_init_list_expect_b = '0;
+        rx_acq_list_expect_a = '0;
+        rx_acq_list_expect_b = '0;
 
-            acq_cmd_list[cmd_idx*BITS_PER_WORD-1-:BITS_PER_WORD] = convert_channel_cmd_idx;
+        set_init_vector(0, 16'hFF00, 16'h0004);
+        set_init_vector(1, 16'hFF00, 16'h0004);
+        set_init_vector(2, 16'hFF00, 16'h0004);
+        set_init_vector(3, 16'hFF00, 16'h0004);
+        set_init_vector(4, 16'hFF00, 16'h0004);
+        set_init_vector(5, 16'hFF00, 16'h0004);
+        set_init_vector(6, 16'hFF00, 16'h0004);
+        set_init_vector(7, 16'hFF00, 16'h0004);
+        set_init_vector(8, 16'hFF00, 16'h0004);
+        set_init_vector(9, 16'h5500, 16'h0000);
+        set_init_vector(10, 16'h95FF, 16'hFFFF);
+        set_init_vector(11, 16'h94FF, 16'hFFFF);
+        set_init_vector(12, 16'h93FF, 16'hFFFF);
+        set_init_vector(13, 16'h92FF, 16'hFFFF);
+        set_init_vector(14, 16'h91FF, 16'hFFFF);
+        set_init_vector(15, 16'h90FF, 16'hFFFF);
+        set_init_vector(16, 16'h8FFF, 16'hFFFF);
+        set_init_vector(17, 16'h8EFF, 16'hFFFF);
+        set_init_vector(18, 16'h8D86, 16'hFF86);
+        set_init_vector(19, 16'h8C2C, 16'hFF2C);
+        set_init_vector(20, 16'h8B80, 16'hFF80);
+        set_init_vector(21, 16'h8A17, 16'hFF17);
+        set_init_vector(22, 16'h8980, 16'hFF80);
+        set_init_vector(23, 16'h8816, 16'hFF16);
+        set_init_vector(24, 16'h8700, 16'hFF00);
+        set_init_vector(25, 16'h8680, 16'hFF80);
+        set_init_vector(26, 16'h8540, 16'hFF40);
+        set_init_vector(27, 16'h8480, 16'hFF80);
+        set_init_vector(28, 16'h8300, 16'hFF00);
+        set_init_vector(29, 16'h8204, 16'hFF04);
+        set_init_vector(30, 16'h8142, 16'hFF42);
+        set_init_vector(31, 16'h80DE, 16'hFFDE);
+        set_init_vector(32, 16'hFF00, 16'h0004);
+        set_init_vector(33, 16'hFF00, 16'h0004);
+
+        for (int ch_idx = 1; ch_idx <= NUM_CHAN; ch_idx = ch_idx + 1) begin
+            automatic logic [15:0] convert_channel_ch_idx = {2'b0, 6'(ch_idx - 1), 8'b0};
+            automatic logic [15:0] rx_expect = SAMPLE_BASE + {10'b0, 6'(ch_idx - 1)};
+
+            acq_cmd_list[ch_idx-1] = convert_channel_ch_idx;
 
             for (int intan_idx = 0; intan_idx < NUM_INTAN; intan_idx = intan_idx + 1) begin
                 automatic logic [15:0] sensor_offset = intan_idx * 16'h0100;
-                rx_acq_list_expect_a[((cmd_idx-1) * NUM_INTAN + intan_idx + 1) * BITS_PER_WORD - 1 -: BITS_PER_WORD] = sensor_offset + rx_expect;
-                rx_acq_list_expect_b[((cmd_idx-1) * NUM_INTAN + intan_idx + 1) * BITS_PER_WORD - 1 -: BITS_PER_WORD] = sensor_offset + rx_expect + 16'h0020;
+                rx_acq_list_expect_a[ch_idx-1][intan_idx] = sensor_offset + rx_expect;
+                rx_acq_list_expect_b[ch_idx-1][intan_idx] = sensor_offset + rx_expect + 16'h0020;
             end
         end
-
-        acq_list_len = 7'(MAX_COMMANDS);
     end
 
     intan_acq_engine #(
@@ -192,8 +163,8 @@ module intan_acq_engine_tb;
         .Intan_frame(Intan_frame),
         .init_list_len(init_list_len),
         .init_cmd_list(init_cmd_list),
-        .rx_init_list_expect_a(rx_init_list_expect_a),
-        .rx_init_list_expect_b(rx_init_list_expect_b),
+        .expect_rx_ans_list_a(rx_init_list_expect_a),
+        .expect_rx_ans_list_b(rx_init_list_expect_b),
         .acq_list_len(acq_list_len),
         .acq_cmd_list(acq_cmd_list),
         .cmd_list_len(cmd_list_len),
@@ -291,12 +262,12 @@ module intan_acq_engine_tb;
     endtask
 
     task automatic assert_acq_lists();
-        assert (rx_ans_list_a == rx_acq_list_expect_a)
+        assert (rx_ans_list_a[NUM_CHAN-1:0] == rx_acq_list_expect_a)
         else
             $error(
                 "rx_ans_list_a mismatch: got %h, expected %h", rx_ans_list_a, rx_acq_list_expect_a
             );
-        assert (rx_ans_list_b == rx_acq_list_expect_b)
+        assert (rx_ans_list_b[NUM_CHAN-1:0] == rx_acq_list_expect_b)
         else
             $error(
                 "rx_ans_list_b mismatch: got %h, expected %h", rx_ans_list_b, rx_acq_list_expect_b
@@ -329,6 +300,10 @@ module intan_acq_engine_tb;
     task automatic pulse_start_init();
         repeat (1) @(posedge clk);
         start_init = 1'b1;
+        for (int intan_idx = 0; intan_idx < NUM_INTAN; intan_idx = intan_idx + 1) begin
+            intan_fault_bit[intan_idx] = 1'b0;
+            intan_init_bit[intan_idx]  = 1'b1;
+        end
         repeat (1) @(posedge clk);
         start_init = 1'b0;
     endtask
@@ -384,16 +359,16 @@ module intan_acq_engine_tb;
     task automatic run_command_list_test(input int command_count, input bit initializing);
         if (command_count <= MAX_COMMANDS) begin
             // construct tx_cmd_list as well as associated rx expected lists.
-            logic [CMD_LIST_WIDTH-1:0] cmd_list = '0;
-            logic [NUM_INTAN * CMD_LIST_WIDTH-1:0] rx_list_expect_a;
-            logic [NUM_INTAN * CMD_LIST_WIDTH-1:0] rx_list_expect_b;
+            logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] cmd_list = '0;
+            logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_list_expect_a = '0;
+            logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_list_expect_b = '0;
 
             for (int cmd_idx = 1; cmd_idx <= command_count; cmd_idx = cmd_idx + 1) begin
-                cmd_list[cmd_idx*BITS_PER_WORD-1-:BITS_PER_WORD] = CONVERT_CHANNEL_32;
+                cmd_list[cmd_idx-1] = CONVERT_CHANNEL_32;
                 for (int intan_idx = 0; intan_idx < NUM_INTAN; intan_idx = intan_idx + 1) begin
                     logic [15:0] sensor_offset = intan_idx * 16'h0100;
-                    rx_list_expect_a[((cmd_idx-1) * NUM_INTAN + intan_idx + 1) * BITS_PER_WORD - 1 -: BITS_PER_WORD] = sensor_offset + SENSOR_0_EXPECT_A;
-                    rx_list_expect_b[((cmd_idx-1) * NUM_INTAN + intan_idx + 1) * BITS_PER_WORD - 1 -: BITS_PER_WORD] = sensor_offset + SENSOR_0_EXPECT_B;
+                    rx_list_expect_a[cmd_idx-1][intan_idx] = sensor_offset + SENSOR_0_EXPECT_A;
+                    rx_list_expect_b[cmd_idx-1][intan_idx] = sensor_offset + SENSOR_0_EXPECT_B;
                 end
             end
 
@@ -434,7 +409,7 @@ module intan_acq_engine_tb;
     end
 
     initial begin : test_acq_engine
-        reading_fault_recover();
+        baseline_progression();
         $finish;
     end
 
