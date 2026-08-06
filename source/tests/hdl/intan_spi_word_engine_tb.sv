@@ -147,6 +147,8 @@ module intan_spi_word_engine_tb;
         .sclk(sclk),
         .mosi(mosi),
         .miso(miso[0]),
+        .fault_bit(0),
+        .init_bit(1),
         .captured_command(captured_command_0),
         .command_valid(command_valid_0)
     );
@@ -160,6 +162,8 @@ module intan_spi_word_engine_tb;
         .sclk(sclk),
         .mosi(mosi),
         .miso(miso[1]),
+        .fault_bit(0),
+        .init_bit(1),
         .captured_command(captured_command_1),
         .command_valid(command_valid_1)
     );

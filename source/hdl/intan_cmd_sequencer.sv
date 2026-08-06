@@ -40,12 +40,14 @@ module intan_cmd_sequencer #(
             done_seq_pulse   <= 1'b0;
             running_sequence <= 1'b1;
             // all things associated with resetting in some sense?
-        end else if (running_sequence) begin
+        end
+        if (running_sequence || start_seq_pulse) begin
             // each time the word engine is done, initiate.
+            // This is faulty, means we have to wait a full cycle to start.
             if (done_pulse) begin  // only runs once?
                 cmd_cnt <= cmd_cnt + 1;
 
-                if (cmd_cnt - 2 < cmd_list_len) begin
+                if (cmd_cnt < cmd_list_len + 2) begin
                     if (cmd_cnt >= 2) begin
                         // read from rx, check endianness
                         for (
@@ -55,11 +57,13 @@ module intan_cmd_sequencer #(
                             rx_ans_list_b[((16'(cmd_cnt-2)*NUM_INTAN)+sensor_idx)*BITS_PER_WORD-1-:BITS_PER_WORD] <= rx_ans_b[sensor_idx*BITS_PER_WORD-1-:BITS_PER_WORD];
                         end
                     end
-                    tx_word <= tx_cmd_list[16'(cmd_cnt+1)*BITS_PER_WORD-1-:BITS_PER_WORD];
+                    tx_word <= tx_cmd_list[16'(cmd_cnt+2)*BITS_PER_WORD-1-:BITS_PER_WORD];
 
                     if (cmd_cnt - 2 == cmd_list_len - 1) begin
                         run_cyclic <= 1'b0;
                         done_seq_pulse <= 1'b1;
+                        cmd_cnt <= '0;
+                        tx_word <= '0;
                         running_sequence <= 1'b0;
                     end
                 end

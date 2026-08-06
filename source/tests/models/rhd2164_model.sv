@@ -26,6 +26,7 @@ module rhd2164_model #(
     // The datasheet permits up to 12 ns from the relevant sensor edge until
     // MISO is valid.  Use 0 ns for simple functional tests, then 12 ns for a
     // timing-margin test.
+
     parameter time T_MISO = 0ns,
 
     parameter bit CHECK_TIMING = 1'b1,
@@ -43,6 +44,9 @@ module rhd2164_model #(
     input  logic sclk,
     input  logic mosi,
     output wire  miso,
+
+    input logic fault_bit,
+    input logic init_bit,
 
     output logic [15:0] captured_command,
     output logic command_valid
@@ -301,12 +305,14 @@ module rhd2164_model #(
         // Keep the internal data path free of high-impedance values.
         miso_data = 1'b0;
 
-        if (!cs_n && sclk) begin
-            if (falling_edge_count <= 15) miso_data = response_tx_a[15-falling_edge_count];
+        if (fault_bit == 1'b0 && init_bit == 1'b1) begin
+            if (!cs_n && sclk) begin
+                if (falling_edge_count <= 15) miso_data = response_tx_a[15-falling_edge_count];
 
-        end else if (!cs_n) begin
-            if ((rising_edge_count >= 1) && (rising_edge_count <= 16))
-                miso_data = response_tx_b[16-rising_edge_count];
+            end else if (!cs_n) begin
+                if ((rising_edge_count >= 1) && (rising_edge_count <= 16))
+                    miso_data = response_tx_b[16-rising_edge_count];
+            end
         end
     end
 

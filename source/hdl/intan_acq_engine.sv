@@ -15,14 +15,14 @@ module intan_acq_engine #(
     // init specific
     input logic [6:0] init_list_len,
     input logic [MAX_COMMANDS * BITS_PER_WORD-1:0] init_cmd_list,
-    input logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] expect_rx_ans_list_a,
-    input logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] expect_rx_ans_list_b,
+    input logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_init_list_expect_a,
+    input logic [MAX_COMMANDS * NUM_INTAN * BITS_PER_WORD-1:0] rx_init_list_expect_b,
 
     // reading specific
     input logic [6:0] acq_list_len,
     input logic [MAX_COMMANDS * BITS_PER_WORD-1:0] acq_cmd_list,
 
-    // direction of intan_cmd_sequencer
+    // direction of intan_cmd_sequencer (general)
     output logic [6:0] cmd_list_len,
     output logic [MAX_COMMANDS * BITS_PER_WORD-1:0] tx_cmd_list,
     output logic start_seq_pulse,
@@ -75,7 +75,7 @@ module intan_acq_engine #(
                     start_seq_pulse <= 1'b0;
 
                     if (done_seq_pulse) begin
-                        if (rx_ans_list_a == expect_rx_ans_list_a && rx_ans_list_b == expect_rx_ans_list_b) begin
+                        if (rx_ans_list_a == rx_init_list_expect_a && rx_ans_list_b == rx_init_list_expect_b) begin
                             intan_state <= ST_READ_READY;
                             done <= 1'b1;
                         end else begin
@@ -89,6 +89,8 @@ module intan_acq_engine #(
 
                     if (start_read) begin
                         intan_state <= ST_READING;
+                        cmd_list_len <= acq_list_len;
+                        tx_cmd_list <= acq_cmd_list;
                         Intan_frame.init_read_ts <= timestamp;
                         Intan_frame.done_read_ts <= 64'b0;
                         for (
@@ -109,7 +111,7 @@ module intan_acq_engine #(
                 ST_READING: begin
                     start_seq_pulse <= 1'b0;
 
-                    if (done_seq_pulse) begin
+                    if (done_seq_pulse && !start_seq_pulse) begin
                         intan_state <= ST_DONE;
                         Intan_frame.done_read_ts <= timestamp;
 
@@ -136,6 +138,8 @@ module intan_acq_engine #(
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
                     end
+                end
+                default: begin
                 end
             endcase
         end
