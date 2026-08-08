@@ -10,6 +10,7 @@ module intan_acq_engine #(
     input logic start_read,
     input logic [63:0] timestamp,  // live timestamp!
 
+    output logic read_mode,
     output config_pkg::Intan_frame_t Intan_frame,
 
     // init specific
@@ -33,6 +34,7 @@ module intan_acq_engine #(
     input logic done_seq_pulse,
 
     output logic done,
+    output logic busy,
     output logic err
 );
     // I should be forming the command list at this point!
@@ -52,7 +54,14 @@ module intan_acq_engine #(
     integer chan_idx;
     always_ff @(posedge clk) begin
         if (rst) begin
+            read_mode <= 1'b0;
+            intan_state <= ST_PRE_INIT;
+            busy <= 1'b0;
             done <= 1'b0;
+            err <= 1'b0;
+            cmd_list_len <= '0;
+            tx_cmd_list <= '0;
+            start_seq_pulse <= 1'b0;
             Intan_frame.init_read_ts <= 64'b0;
             Intan_frame.done_read_ts <= 64'b0;
             for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
@@ -63,16 +72,20 @@ module intan_acq_engine #(
             case (intan_state)
                 ST_PRE_INIT: begin
                     done <= 1'b0;
+                    read_mode <= 1'b0;
+                    busy <= 1'b0;
 
                     if (start_init) begin
                         intan_state <= ST_INITING;
                         cmd_list_len <= init_list_len;
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
+                        err <= 1'b0;
                     end
                 end
                 ST_INITING: begin
                     start_seq_pulse <= 1'b0;
+                    busy <= 1'b1;
 
                     if (done_seq_pulse) begin
                         if (rx_ans_list_a == expect_rx_ans_list_a && rx_ans_list_b == expect_rx_ans_list_b) begin
@@ -86,6 +99,8 @@ module intan_acq_engine #(
                 end
                 ST_READ_READY: begin
                     done <= 1'b0;
+                    read_mode <= 1'b1;
+                    busy <= 1'b0;
 
                     if (start_read) begin
                         intan_state <= ST_READING;
@@ -106,10 +121,12 @@ module intan_acq_engine #(
                         cmd_list_len <= init_list_len;
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
+                        err <= 1'b0;
                     end
                 end
                 ST_READING: begin
                     start_seq_pulse <= 1'b0;
+                    busy <= 1'b1;
 
                     if (done_seq_pulse && !start_seq_pulse) begin
                         intan_state <= ST_DONE;
@@ -121,14 +138,15 @@ module intan_acq_engine #(
                         ) begin
                             // sensor_id already filled out in previous state.
                             for (chan_idx = 0; chan_idx < NUM_CHAN; chan_idx = chan_idx + 1) begin
-                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*chan_idx+:BITS_PER_WORD] <= rx_ans_list_b[(NUM_CHAN-1)-chan_idx][sensor_idx];
-                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*(chan_idx+32)+:BITS_PER_WORD] <= rx_ans_list_a[(NUM_CHAN-1)-chan_idx][sensor_idx];
+                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*chan_idx+:BITS_PER_WORD] <= rx_ans_list_a[chan_idx][sensor_idx];
+                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*(chan_idx+NUM_CHAN)+:BITS_PER_WORD] <= rx_ans_list_b[chan_idx][sensor_idx];
                             end
                         end
                     end
                 end
                 ST_DONE: begin
                     done <= 1'b1;
+                    busy <= 1'b0;
                     intan_state <= ST_READ_READY;
                 end
                 ST_FAULT: begin
@@ -137,6 +155,8 @@ module intan_acq_engine #(
                         cmd_list_len <= init_list_len;
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
+                        busy <= 1'b0;
+                        err <= 1'b0;
                     end
                 end
                 default: begin

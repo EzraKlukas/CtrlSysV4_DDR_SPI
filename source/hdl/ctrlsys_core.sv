@@ -1,7 +1,5 @@
 `timescale 1ns / 1ps
 
-import config_pkg::*;
-
 module ctrlsys_core (
     input logic clk,
     input logic rst_n,
@@ -54,6 +52,7 @@ module ctrlsys_core (
 );
 
     localparam logic [6:0] SPI_REG_ADDR = 7'd45;
+    localparam int MAX_COMMANDS = 34;
 
     initial begin
         if (BUFFER_SIZE < 1) $error("ctrlsys_core requires BUFFER_SIZE >= 1");
@@ -63,13 +62,32 @@ module ctrlsys_core (
 
     logic [63:0] timestamp;
     logic start_read_icm;
+    logic start_init_intan;
     logic start_read_intan;
+    logic read_mode_intan;
+
     logic spi_start;
     logic core_rst;
 
-    ICM_frame_t icm_frame;
-    ICM_frame_t debug_icm_frame;
-    Intan_frame_t intan_frame;
+    logic [6:0] init_list_len;
+    logic [MAX_COMMANDS-1:0][INTAN_BITS_PER_WORD-1:0] init_cmd_list;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][INTAN_BITS_PER_WORD-1:0] expect_rx_ans_list_a;
+    logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][INTAN_BITS_PER_WORD-1:0] expect_rx_ans_list_b;
+
+    logic [6:0] acq_list_len;
+    logic [MAX_COMMANDS-1:0][INTAN_BITS_PER_WORD-1:0] acq_cmd_list;
+
+    logic error_intan;
+    logic intan_sclk;
+    logic intan_mosi;
+    logic intan_cs_n;
+    logic [NUM_INTAN-1:0] intan_miso;
+    logic intan_busy;
+    logic done_pulse_intan;
+
+    config_pkg::ICM_frame_t icm_frame;
+    config_pkg::ICM_frame_t debug_icm_frame;
+    config_pkg::Intan_frame_t intan_frame;
 
     logic spi_reader_sclk;
     logic spi_reader_mosi;
@@ -77,8 +95,6 @@ module ctrlsys_core (
     logic [NUM_ICM-1:0] spi_reader_miso;
     logic spi_busy;
     logic spi_done;
-    logic intan_busy;
-    logic intan_done;
     logic axi_spi_miso;
 
     logic packet_fifo_full;
@@ -219,21 +235,43 @@ module ctrlsys_core (
         .cs_n(spi_reader_cs_n)
     );
 
-    Intan_reader u_intan_reader (
+    intan_reader #(
+        .MAX_COMMANDS(34),
+        .NUM_INTAN(NUM_INTAN),
+        .NUM_CHANNELS_PER_ADC(INTAN_CHANNELS / 2),
+        .BITS_PER_WORD(INTAN_BITS_PER_WORD),
+        .SCLK_HALF_PERIOD_CYCLES(3),
+        .CS_TO_SCLK_CYCLES(INTAN_T_CS_1),
+        .SCLK_TO_CS_CYCLES(INTAN_T_CS_2),
+        .CS_HIGH_CYCLES(INTAN_T_CS_OFF)
+    ) u_intan_reader (
         .clk(clk),
         .rst(core_rst),
-        .start(start_read_intan),
+        .start_init(start_init_intan),
+        .start_read(start_read_intan),
         .timestamp(timestamp),
-        .Intan_frame(intan_frame),
+        .read_mode(read_mode_intan),
+        .init_list_len(init_list_len),
+        .init_cmd_list(init_cmd_list),
+        .expect_rx_ans_list_a(expect_rx_ans_list_a),
+        .expect_rx_ans_list_b(expect_rx_ans_list_b),
+        .acq_list_len(acq_list_len),
+        .acq_cmd_list(acq_cmd_list),
+        .intan_frame(intan_frame),
+        .done_pulse(done_pulse_intan),
         .busy(intan_busy),
-        .done(intan_done)
+        .error(error_intan),
+        .intan_sclk(intan_sclk),
+        .intan_mosi(intan_mosi),
+        .intan_cs_n(intan_cs_n),
+        .intan_miso(intan_miso)
     );
 
     packet_writer u_packet_writer (
         .clk(clk),
         .rst(core_rst || !axil_enable),
         .ICM_frame_done(spi_done),
-        .Intan_frame_done(intan_done),
+        .Intan_frame_done(done_pulse_intan),
         .ICM_frame_in(icm_frame),
         .Intan_frame_in(intan_frame),
         .packet_ready(packet_fifo_packet_space),

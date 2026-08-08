@@ -3,6 +3,8 @@
 import config_pkg::*;
 
 module packet_path_layout_tb;
+    localparam int INTAN_SENSOR_DATA_BYTES = INTAN_BITS_PER_WORD * INTAN_CHANNELS / 8;
+
     logic clk = 1'b0;
     logic rst = 1'b1;
 
@@ -97,7 +99,7 @@ module packet_path_layout_tb;
             intan_frame.done_read_ts = 64'h2000_0000_0000_0000 + frame_id;
             for (sensor = 0; sensor < NUM_INTAN; sensor = sensor + 1) begin
                 intan_frame.Intan_data[sensor].sensor_id = sensor[7:0];
-                for (byte_idx = 0; byte_idx < INTAN_DATA_BYTES; byte_idx = byte_idx + 1)
+                for (byte_idx = 0; byte_idx < INTAN_SENSOR_DATA_BYTES; byte_idx = byte_idx + 1)
                 intan_frame.Intan_data[sensor].data[8*byte_idx +: 8] =
                         byte'(8'h40 + frame_id + sensor + byte_idx);
             end

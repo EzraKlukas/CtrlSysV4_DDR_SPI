@@ -83,13 +83,13 @@ proc ctrlsys_parse_args {repo_root} {
 
 proc ctrlsys_copy_sources {hdl_dir destination file_names} {
     file mkdir $destination
+
     foreach file_name $file_names {
         set source [file normalize [file join $hdl_dir $file_name]]
         set target [file normalize [file join $destination $file_name]]
+
         ctrlsys_require_file $source "HDL source"
-        file copy -force \
-            [file join $repo_root source hdl config_pkg.sv] \
-            [file join $repo_root IP ctrlsys_core src config_pkg.sv]
+        file copy -force $source $target
     }
 }
 
