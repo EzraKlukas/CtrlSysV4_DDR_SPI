@@ -19,7 +19,6 @@ module intan_spi_word_engine #(
 
     input logic run_cyclic,
     output logic done_pulse,
-    // output logic busy,
     input logic [15:0] tx_word,
 
     output logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_word_a,
@@ -34,9 +33,7 @@ module intan_spi_word_engine #(
 
     // sequential copies of spi lines
     logic cs_n_d;  // next value, computed by combinational logic
-    initial cs_n_q = 1'b1;
     logic cs_n_q;  // current registered value, stored in flip-flop
-    initial cs_n_q = 1'b1;
     logic mosi_d;
     logic mosi_q;
 
@@ -60,8 +57,6 @@ module intan_spi_word_engine #(
 
     assign done_pulse = transaction_done;
 
-    // assign busy = run_cyclic && !done_pulse;
-
     // data
     logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] curr_rx_word_a;
     logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] curr_rx_word_b;
@@ -82,14 +77,20 @@ module intan_spi_word_engine #(
     logic sclk_en_q;
     logic sclk_rise_stb;  // serial clock rising strobes (pulses on sclk transition)
     logic sclk_fall_stb;
-    logic sclk_has_pulsed_q;  // should be initially set to 1'b0, but is initially set to X!
-    logic sclk_has_pulsed_d;  // should be initially set to 1'b0, but is initially set to X!
-    logic [3:0] sclk_cnt_q;  // probably increase, number of bits / SPI cycle (in SDR).
-    logic [3:0] sclk_cnt_d;  // probably increase, number of bits / SPI cycle (in SDR).
+    logic sclk_has_pulsed_q;
+    logic sclk_has_pulsed_d;
+    logic [3:0] sclk_cnt_q;
+    logic [3:0] sclk_cnt_d;
 
     initial begin
         if (SCLK_HALF_PERIOD_CYCLES < 1)
-            $error("Intan_reader requires SCLK_HALF_PERIOD_CYCLES_CYCLES >= 1");
+            $error("intan_spi_word_engine requires SCLK_HALF_PERIOD_CYCLES >= 1");
+        if (T_CS_1 < SCLK_HALF_PERIOD_CYCLES)
+            $error("intan_spi_word_engine requires T_CS_1 >= SCLK_HALF_PERIOD_CYCLES");
+        if (T_CS_2 < SCLK_HALF_PERIOD_CYCLES)
+            $error("intan_spi_word_engine requires T_CS_2 >= SCLK_HALF_PERIOD_CYCLES");
+        if (T_CS_2 < 2)
+            $error("intan_spi_word_engine requires T_CS_2 >= 2 for registered MISO-B bit 0");
     end
 
     assign cs_n = cs_n_q;  // _n means active low
@@ -121,7 +122,6 @@ module intan_spi_word_engine #(
         sclk_cnt_d = sclk_cnt_q;
         sclk_has_pulsed_d = sclk_has_pulsed_q;
 
-        // sclk_rise_stb and sclk_fall_stb should be calculated in here?
         if (sclk_en_q) begin
             if (sclk_div_cnt_q == SCLK_DIV_CNT_W'(SCLK_HALF_PERIOD_CYCLES - 1) && (sclk_cnt_d != 0 || !sclk_has_pulsed_q)) begin
                 sclk_div_cnt_d = '0;
@@ -162,7 +162,7 @@ module intan_spi_word_engine #(
             state_cycles_q <= '0;
 
             sclk_en_q <= 1'b0;
-            cs_n_q <= 1'b1; // don't worry I'll fix back, for testbench purposes easiest to also set initial value.
+            cs_n_q <= 1'b1;
             mosi_q <= 1'b0;
         end else begin
             curr_state <= next_state;
@@ -217,7 +217,7 @@ module intan_spi_word_engine #(
             end
 
             ST_TRANSFER: begin
-                if (sclk_fall_stb) begin  // this never happens!
+                if (sclk_fall_stb) begin
                     if (sclk_q == 1'b0) begin
                         for (
                             sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1
@@ -240,8 +240,11 @@ module intan_spi_word_engine #(
             end
 
             ST_CS_DEASSERT_SETUP: begin
-                // take care of B0
-                if (state_cycles_q == 16'(SCLK_HALF_PERIOD_CYCLES)) begin
+                // MISO-B bit 0 becomes available after the final falling SCLK
+                // edge.  Register it one fabric clock before done_pulse so the
+                // sequencer always consumes the completed word, including when
+                // T_CS_2 equals one SCLK half-period.
+                if (state_cycles_q == 16'(T_CS_2 - 1)) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
                         next_rx_word_b[sensor_idx][sclk_cnt_q] = miso[sensor_idx];
                     end

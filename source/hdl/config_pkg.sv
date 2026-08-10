@@ -1,22 +1,30 @@
+`timescale 1ns / 1ps
+
 package config_pkg;
 
     localparam int NUM_ICM = 4;
     localparam int NUM_INTAN = 8;
     localparam int ICM_DATA_BYTES = 20;
-    localparam int INTAN_SAMPLING_RATIO = 30;
+    localparam int INTAN_SAMPLING_RATIO = 2;
     localparam int INTAN_BITS_PER_WORD = 16;
     localparam int INTAN_CHANNELS = 64;
     localparam int BUFFER_SIZE = 10;
     localparam int AXIS_DATA_WIDTH = 1024;
     localparam int PACKET_BYTES = 24576;
 
-    // Intan SPI timing specifics
-    localparam int INTAN_T_CS_1 = 6;
-    localparam int INTAN_T_CS_2 = 6;
+    localparam int FPGA_CLK_HZ = 125_000_000;
+    localparam int ICM_SAMPLE_PERIOD_TICKS_DEFAULT = FPGA_CLK_HZ / 1000;
+    localparam int INTAN_SAMPLE_PERIOD_TICKS_DEFAULT =
+        ICM_SAMPLE_PERIOD_TICKS_DEFAULT / INTAN_SAMPLING_RATIO;
+
+    // Intan SPI timing specifics.  25 half-period clocks at 125 MHz gives
+    // SCLK = 125 MHz / (2 * 25) = 2.5 MHz.
+    localparam int INTAN_T_CS_1 = 25;
+    localparam int INTAN_T_CS_2 = 25;
     localparam int INTAN_T_MOSI = 3;
     localparam int INTAN_T_MISO = 3;
     localparam int INTAN_T_CS_OFF = 20;
-    localparam int INTAN_T_SCLK = 3;
+    localparam int INTAN_T_SCLK = 25;
 
     // measurement = one sensor's data
     // frame       = all sensors of one type for one read
@@ -59,6 +67,7 @@ package config_pkg;
     localparam int MAX_INTAN_FRAMES_PER_PACKET =
         (MAX_INTAN_FRAMES_BY_DATA < PACKET_TRAILER_INTAN_OFFSET_COUNT) ?
         MAX_INTAN_FRAMES_BY_DATA : PACKET_TRAILER_INTAN_OFFSET_COUNT;
+    localparam int EXPECTED_INTAN_FRAMES_PER_PACKET = INTAN_SAMPLING_RATIO;
     localparam int MAX_PACKET_DATA_BYTES =
         MAX_INTAN_FRAMES_PER_PACKET * INTAN_FRAME_BYTES + ICM_FRAME_BYTES;
 

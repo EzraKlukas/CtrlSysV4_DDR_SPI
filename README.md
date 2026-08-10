@@ -1,489 +1,205 @@
-# CtrlSysV4
+# CtrlSysV4 RHD2164 acquisition core
 
-CtrlSysV4 is a Red Pitaya / Zynq acquisition design for collecting one ICM-20948 sensor frame together with a burst of Intan RHD2164 frames, packing the result into a fixed-size DMA packet, and streaming that packet through AXI DMA to the processor. The current hardware configuration is:
-
-- 4 ICM MISO channels on a shared SPI bus (one MOSI, CS, SCLK, and individual MISO).
-- 8 synthetic Intan channels generated in FPGA logic by `Intan_reader.sv`.
-- 1024-bit AXI4-Stream packet words into the block design DMA path.
-- 24,576 byte fixed DMA packets, including a 256 byte metadata trailer.
-- 1 ms default ICM packet cadence from the Red Pitaya test program.
-- 30:1 nominal Intan-to-ICM sampling ratio.
-
-The design was built to make packet integrity easy to verify from software. Every packet has a fixed byte length and a trailer containing magic bytes, packet size, valid-data size, frame counts, frame offsets, error flags, and drop counters.
-
-## Repository Layout
+CtrlSysV4 acquires eight Intan RHD2164 sensors and four ICM sensors, assembles fixed-size packets, and presents those packets at an AXI4-Stream DMA boundary. Intan sample data never travels through AXI-Lite.
 
 ```text
-.
-|-- IP/ctrlsys_core/              Packaged Vivado user IP generated from source/hdl
-|-- Vivado_CtrlSysV4/             Vivado block design project
-|-- build/                        Generated bitstreams, .bit.bin files, temp projects
-|-- source/
-|   |-- constraints/              Project-level XDC constraints
-|   |-- cpp/redpitaya/            Red Pitaya userspace test/streaming programs
-|   |-- hdl/                      Primary RTL sources for the CtrlSys core
-|   |-- python/                   Desktop receiver, analysis, and layout tools
-|   |-- redpitaya/                Device tree overlay sources
-|   |-- scripts/                  Vivado build, package, simulation, and utility scripts
-|   `-- tests/hdl/                HDL testbenches
+RHD2164 pins
+  -> intan_reader
+       -> intan_acq_engine
+       -> intan_cmd_sequencer
+       -> intan_spi_word_engine
+  -> packet_writer -> packet_buffer -> packet_to_axis -> AXI4-Stream S2MM DMA
+
+AXI4-Lite -> control, status, counters, and debug words only
 ```
 
-The packaged IP under `IP/ctrlsys_core/src` is generated from the HDL source tree by `source/scripts/repackage_ctrlsys_core_ip.tcl`. Treat `source/hdl` as the design source of truth and `IP/ctrlsys_core` as a generated Vivado package.
+`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. Regenerate them only through the packaging step after reviewing this checkpoint.
 
-## Data Path Overview
-
-At runtime, the control path and data path are:
-
-1. `axil_regs` exposes control/status registers to the PS over AXI4-Lite.
-2. `stopwatch_64` provides a 64-bit fabric-clock timestamp.
-3. `acquisition_controller` emits scheduled start pulses for ICM and Intan reads.
-4. `ICM_reader` performs an SPI burst read across the configured ICM MISO lines.
-5. `Intan_reader` generates synthetic Intan frames for datapath testing.
-6. `packet_writer` snapshots available Intan frames when an ICM frame is ready, appends the ICM frame, zero pads, and emits a 256 byte trailer.
-7. `packet_buffer` stores complete 1024-bit packet words and reports when a whole packet is available.
-8. `packet_to_axis` drains one complete packet to AXI4-Stream with `tlast` on the final word.
-9. AXI DMA S2MM writes the packet into reserved or `u-dma-buf` memory.
-10. The Red Pitaya C program streams packet words to the desktop receiver over TCP.
-11. `source/python/redpitaya_dma_receiver.py` reconstructs bytes, decodes trailers, prints payloads, and writes timing CSVs.
-
-## Packet Layout
-
-Current constants:
+## Production configuration
 
 | Item | Value |
-| --- | ---: |
-| `NUM_ICM` | 4 |
-| `NUM_INTAN` | 8 |
-| `ICM_DATA_BYTES` | 20 |
-| `INTAN_DATA_BYTES` | 64 |
-| `INTAN_SAMPLING_RATIO` | 30 |
-| `AXIS_DATA_WIDTH` | 1024 bits |
-| AXI bytes per word | 128 |
-| `PACKET_BYTES` | 24576 |
-| `PACKET_AXIS_WORDS` | 192 |
-| `PACKET_TRAILER_BYTES` | 256 |
-| Trailer offset | 24320 / `0x5f00` |
+|---|---:|
+| Fabric clock | 125 MHz |
+| ICM base period | 125,000 ticks / 1 ms / approximately 1 kHz |
+| `INTAN_SAMPLING_RATIO` | 2 |
+| Intan period | 62,500 ticks / 0.5 ms / approximately 2 kHz |
+| Intan SPI half-period divider | 25 fabric clocks |
+| Intan SCLK | 2.5 MHz |
+| Intan CS setup / hold | 25 clocks / 200 ns each |
+| Intan CS-high time | 20 clocks / 160 ns |
+| AXI stream width | 1024 bits / 128 bytes |
+| Fixed packet | 24,576 bytes / 192 AXI beats |
+| Trailer | 256 bytes at byte 24,320 (`0x5f00`) |
 
-Frame sizes:
+The 2.5 MHz SCLK is intentionally conservative for initial hardware operation. Testbenches may override the divider to reduce simulation time. SPI activity is synchronous to `clk`; changing the fabric clock without recalculating these integer timing constants changes the physical bus timing.
 
-| Frame | Contents | Bytes |
-| --- | --- | ---: |
-| Intan frame | `init_read_ts`, `done_read_ts`, 8 measurements of 1 byte sensor ID + 64 data bytes | 536 |
-| ICM frame | `init_read_ts`, `done_read_ts`, 4 measurements of 1 byte sensor ID + 20 data bytes | 100 |
+## Intan program and reader contract
 
-Steady-state packets usually contain 30 Intan frames and 1 ICM frame:
+[`source/hdl/intan_program.sv`](source/hdl/intan_program.sv) contains the static production initialization program, expected A/B responses for every sensor, and the 32-command acquisition program. The response sequencer sends two extra words to flush the RHD2164 two-command pipeline. The command and response ports remain packed multidimensional arrays and are indexed directly by command and sensor.
+
+`intan_reader` is a wiring wrapper only; its state lives in the three modules shown above. Its status contract is:
+
+- `initialized`: level; high only after an initialization response set matches.
+- `init_done_pulse`: one `clk` cycle after successful initialization only.
+- `frame_done_pulse`: one `clk` cycle after a complete acquisition frame has already been registered.
+- `busy`: level while an initialization or acquisition command sequence is active.
+- `error`: level after a failed initialization; cleared when a new initialization attempt is accepted.
+
+Reads before initialization and requests while busy are ignored. Failed initialization cannot produce `frame_done_pulse`. `ctrlsys_core` connects only `frame_done_pulse` to `packet_writer`, so initialization cannot enqueue an empty sample frame.
+
+The physical top-level Intan interface is shared `intan_sclk`, shared `intan_mosi`, shared active-low `intan_cs_n`, and `intan_miso[7:0]` with one return line per sensor. No physical pin assignment is specified in this repository checkpoint.
+
+## Acquisition scheduling
+
+The scheduler requests initialization with a one-cycle pulse whenever the Intan subsystem is uninitialized and idle. It waits for an attempt to become busy and, after a failure, emits a fresh retry pulse rather than holding a level-sensitive start.
+
+Acquisition is active only when `enable && intan_initialized`. This effective condition is edge-detected. If software enables acquisition while initialization is still running, successful initialization anchors both schedules at the current timestamp and issues the first eligible ICM and Intan reads. ICM reads are never requested while the ICM reader is busy; Intan reads are issued only while initialized and idle.
+
+For an on-time read, the next deadline advances from the previous scheduled timestamp, preserving ideal-time scheduling. A deadline encountered while its reader is busy increments that reader's missed counter and re-anchors at the current timestamp. A reader that is idle but at least two periods late also records one miss, issues one current read, and re-anchors. In either case the controller does not burst stale reads to catch up. A zero period disables periodic deadlines.
+
+## Frame and packet format
+
+All scalar fields and packed payload fields are serialized most-significant byte first. Within the packed `Intan_frame_t`, physical sensor records appear in descending packed-index order (sensor ID 7 first through ID 0). Within each sensor payload, channel 63 appears first and channel 0 last in the byte stream. Host decoding restores logical channel numbering.
+
+Response A maps to channels 0–31 and response B to channels 32–63. Every assignment includes the sensor index. Each channel is one unsigned 16-bit sample in the byte stream.
+
+| Structure | Composition | Bytes |
+|---|---|---:|
+| Intan measurement | 1 sensor-ID byte + 64 x 2 sample bytes | 129 |
+| Intan frame | 8-byte start timestamp + 8-byte done timestamp + 8 measurements | 1,048 |
+| ICM measurement | 1 sensor-ID byte + 20 data bytes | 21 |
+| ICM frame | 16 timestamp bytes + 4 measurements | 100 |
+
+An ICM completion closes a packet. The packet contains every complete buffered Intan frame included in that snapshot, then one ICM frame, zero padding to byte 24,319, and the 256-byte trailer. At the nominal 2:1 cadence a steady packet normally has two Intan frames, but that expectation is not the physical capacity.
+
+The capacity is derived independently:
 
 ```text
-30 * 536 + 100 = 16180 valid data bytes
+floor((24320 data bytes - 100 ICM bytes) / 1048 Intan bytes) = 23 Intan frames
 ```
 
-The packet writer then pads with zeros until byte offset `0x5f00`, where the 256 byte trailer begins. Because the Intan period is derived by integer division from the ICM period, occasional 31-Intan-frame packets can occur. These are valid as long as the trailer fields match the payload layout and no drop/error flags are set.
+The trailer uses big-endian 32-bit fields:
 
-## Trailer Format
+| Trailer offset | Bytes | Field |
+|---:|---:|---|
+| `0x00` | 8 | all-ones magic |
+| `0x08` | 4 | packet number |
+| `0x0c` | 4 | trailer bytes, 256 |
+| `0x10` | 4 | packet bytes, 24,576 |
+| `0x14` | 4 | valid data bytes: `intan_count * 1048 + 100` |
+| `0x18` | 4 | included Intan frame count |
+| `0x1c` | 4 | maximum Intan frame count, 23 |
+| `0x20` | 4 | ICM frame count, normally 1 |
+| `0x24` | 4 | ICM start byte: `intan_count * 1048` |
+| `0x28` | 4 | trailer start byte, 24,320 |
+| `0x2c` | 4 | flags: bit 0 dropped Intan, bit 1 dropped ICM, bit 2 capacity reached |
+| `0x30` | 4 | dropped Intan frames since the prior packet snapshot |
+| `0x34` | 4 | dropped ICM frames since the prior packet snapshot |
+| `0x38` | 192 | 48 Intan start offsets; used entries are `index * 1048` |
+| `0xf8` | 8 | reserved, zero |
 
-The packet trailer is big-endian field-by-field and starts at byte offset `PACKET_BYTES - PACKET_TRAILER_BYTES` (`0x5f00`).
+The fixed packet size is aligned to the 128-byte AXI word. Consequently every output beat has all `tkeep` bits set and `tlast` is asserted on beat 191. `packet_to_axis` holds `tvalid`, `tdata`, `tkeep`, and `tlast` stable during backpressure.
 
-| Offset in trailer | Size | Field | Expected / meaning |
-| ---: | ---: | --- | --- |
-| `0x00` | 8 | magic | `ff ff ff ff ff ff ff ff` |
-| `0x08` | 4 | packet number | FPGA packet counter, starting at 0 after reset |
-| `0x0c` | 4 | trailer bytes | 256 |
-| `0x10` | 4 | packet bytes | 24576 |
-| `0x14` | 4 | valid data bytes | Intan bytes + ICM bytes |
-| `0x18` | 4 | Intan frame count | Number of Intan frames in this packet |
-| `0x1c` | 4 | max Intan frame count | 45 for the current fixed packet size |
-| `0x20` | 4 | ICM frame count | 1 for normal packets |
-| `0x24` | 4 | ICM frame start index | Usually `intan_frame_count * 536` |
-| `0x28` | 4 | trailer start index | 24320 / `0x5f00` |
-| `0x2c` | 4 | flags | Bitfield described below |
-| `0x30` | 4 | dropped Intan frames | Count since previous packet snapshot |
-| `0x34` | 4 | dropped ICM frames | Count since previous packet snapshot |
-| `0x38` | 192 | Intan frame start indices | Up to 48 big-endian offsets |
-| `0xf8` | 8 | reserved | Zero |
+## AXI4-Lite register map
 
-Flag bits:
+AXI4-Lite is control/status only. Reset leaves acquisition disabled and sets the ICM base period to 125,000 ticks. Initialization is independent of `enable`, allowing software to wait for the sensors before arming DMA.
+
+| Address | Access | Definition |
+|---:|:---:|---|
+| `0x00` | R/W | control: bit 0 enable, bit 1 synchronous core soft reset, bit 2 route ICM pins to AXI SPI while the hardware reader is idle |
+| `0x04` | R/W | ICM base period in 125 MHz ticks; Intan period is this value divided by 2 |
+| `0x08` | R | missed Intan opportunity count |
+| `0x0c` | W | one-cycle commands: bit 0 clear error latch/mask, bit 1 reset packet/sample count, bit 2 clear packet-done IRQ latch |
+| `0x10` | R | status bitmask described below |
+| `0x14` | R | completed packet count |
+| `0x18` | R | missed ICM opportunity count |
+| `0x1c` | R | sticky error bitmask described below |
+| `0x20` | R | packet-completion debug word 0: prior packet count |
+| `0x24` | R | debug word 1: packet AXI words, 192 |
+| `0x28` | R | debug word 2: packet-buffer depth in AXI words |
+| `0x2c` | R | debug word 3: ICM start timestamp low word |
+| `0x30` | R | debug word 4: ICM start timestamp high word |
+| `0x34` | R | debug word 5: ICM done timestamp low word |
+| `0x38` | R | debug word 6: ICM done timestamp high word |
+| `0x3c` | R | debug word 7: packet bytes, 24,576 |
+
+Status at `0x10` preserves the original low bits:
 
 | Bit | Meaning |
-| ---: | --- |
-| 0 | At least one Intan frame was dropped before this packet |
-| 1 | At least one ICM frame was dropped before this packet |
-| 2 | The packet reached `MAX_INTAN_FRAMES_PER_PACKET` |
+|---:|---|
+| 0 | aggregate busy (`ICM busy || Intan busy`) |
+| 1 | sticky error latch |
+| 2 | aggregate read in progress |
+| 3 | sticky packet completion/IRQ |
+| 4 | AXI-SPI routing requested; it becomes effective when the ICM reader is idle |
+| 5 | ICM hardware reader busy |
+| 8 | Intan initialized |
+| 9 | Intan busy |
+| 10 | sticky Intan initialization error |
+| 11 | acquisition active (`enable && initialized`) |
+| 12 | sticky packet FIFO overflow |
+| 13 | sticky packet FIFO underflow |
+| 14 | missed Intan counter is nonzero |
+| 15 | missed ICM counter is nonzero |
 
-Known-good steady-state trailer example:
+`error_code` at `0x1c` is a sticky ORed bitmask, not a numeric last-error code:
 
-```text
-magic=ff ff ff ff ff ff ff ff
-trailer_bytes=256
-packet_bytes=24576
-valid_data_bytes=16180
-intan_frame_count=30
-max_intan_frame_count=45
-icm_frame_count=1
-icm_offset=16080
-trailer_offset=24320
-intan_offsets=[0, 536, 1072, ... 15544]
-flags=0x00000000
-dropped_intan=0
-dropped_icm=0
-padding_bytes=8140
-frame_words=6144
+| Bit | Meaning |
+|---:|---|
+| 0 | packet FIFO overflow |
+| 1 | packet FIFO underflow |
+| 2 | Intan initialization failure |
+| 3 | missed Intan opportunity |
+| 4 | missed ICM opportunity |
+
+Writing command bit 0 clears the stored error mask deterministically, except for a fault that is still active on that same clock. Missed counters clear on core reset; clearing the error mask does not erase their history.
+
+Deasserting acquisition enable holds the packet writer, packet FIFO, and AXI-stream adapter in reset, so stopping in the middle of packet construction cannot leave a partial packet queued for a later run. Intan initialization remains active while this data path is reset.
+
+The current design assumes `clk` and `s00_axi_aclk` are the same fabric clock, as in the existing integration. Do not connect them to unrelated clocks without adding and verifying CDC handling.
+
+## Host tools and DMA lifecycle
+
+`source/cpp/redpitaya/sensor_test_hw.[ch]` defines the register, status, error, frame, and packet constants. The packet-sized interrupt path resets/configures the core once, waits up to two seconds for Intan initialization, resets and starts S2MM once, arms one 24,576-byte transfer, and then enables acquisition once. Each completion is validated and consumed, the DMA interrupt is cleared, and the next buffer transfer is armed without resetting the core or reinitializing the Intans. The core and DMA are disabled only on stop or error recovery.
+
+`source/python/redpitaya_dma_receiver.py` validates the fixed trailer and offsets and decodes all 64 big-endian 16-bit channels for each sensor. DMA word byte order may still depend on the processor/DMA capture path; the receiver's existing byte-order scoring remains available for that boundary. `source/python/generate_packet_layout.py` derives Intan sizes from `INTAN_BITS_PER_WORD` and `INTAN_CHANNELS`.
+
+## Verification
+
+The self-checking SystemVerilog tests are in `source/tests/hdl`, with the behavioral RHD2164 model in `source/tests/models`. They cover SPI timing at the model's 12 ns MISO delay, two-command pipeline flushing, static program contents, initialization success/failure/retry, pulse contracts, scheduling/missed deadlines, full 8 x 64 channel packing, repeated frames, packet layout, FIFO-to-AXI transfer, backpressure, `tkeep`, `tlast`, and the complete core through the AXI4-Stream boundary.
+
+Run the complete open-source regression with:
+
+```sh
+bash source/scripts/run_verilator_regression.sh
 ```
 
-## AXI4-Lite Register Map
+Vivado behavioral regressions, when Vivado is installed:
 
-The CtrlSys core is controlled through a 64 byte AXI4-Lite register block. The current Red Pitaya C code expects the CtrlSys base address at `0x40000000`.
-
-| Offset | Access | Name | Description |
-| ---: | --- | --- | --- |
-| `0x00` | R/W | control | Bit 0 enable, bit 1 soft reset, bit 2 use AXI Quad SPI path |
-| `0x04` | R/W | sample period | ICM sample period in 125 MHz fabric-clock ticks |
-| `0x08` | R | reserved | Reads zero |
-| `0x0c` | W | command | Bit 0 clear error, bit 1 reset sample counter, bit 2 clear packet IRQ |
-| `0x10` | R | status | `{state, packet_done, read_in_progress, error, busy}` in low bits |
-| `0x14` | R | sample count | Increments when `packet_writer` completes a packet |
-| `0x18` | R | reserved | Reads zero |
-| `0x1c` | R | error code | `1` means packet FIFO overflow or underflow was latched |
-| `0x20` | R | data word 0 | Snapshot/debug word: sample count at packet completion |
-| `0x24` | R | data word 1 | Snapshot/debug word: packet AXI word count |
-| `0x28` | R | data word 2 | Snapshot/debug word: packet buffer word depth |
-| `0x2c` | R | data word 3 | ICM init timestamp low word |
-| `0x30` | R | data word 4 | ICM init timestamp high word |
-| `0x34` | R | data word 5 | ICM done timestamp low word |
-| `0x38` | R | data word 6 | ICM done timestamp high word |
-| `0x3c` | R | data word 7 | Packet byte count |
-
-The default `sample_period` reset value in the AXI-Lite slave is 5000 ticks, but the Red Pitaya `intan8_icm4_dma_interrupt_test` program writes `SENSOR_TEST_1MS_TICKS` (`125000`) before starting the interrupt DMA run.
-
-## HDL Source File Reference
-
-### `config_pkg.sv`
-
-Defines the shared constants, packed frame types, packet trailer type, and derived packet sizes used throughout the design. Important constants include sensor counts, data-byte widths, the Intan sampling ratio, packet byte count, trailer byte count, AXI stream width, and packet buffer depth. The frame and trailer types are used by readers, packet writer, tests, and tooling to keep the byte layout consistent.
-
-### `ctrlsys_core.sv`
-
-Top-level RTL module packaged as the custom Vivado IP. It ties together the AXI-Lite register block, timestamp counter, scheduler, ICM SPI reader, synthetic Intan reader, packet writer, packet FIFO, AXI stream adapter, and SPI mux. It derives:
-
-```systemverilog
-icm_sample_period = axil_sample_period;
-intan_sample_period = axil_sample_period / INTAN_SAMPLING_RATIO;
-```
-
-It also latches FIFO overflow/underflow errors, exposes debug words through AXI-Lite, and raises a sticky `packet_done_irq` bit until software clears it.
-
-### `acquisition_controller.sv`
-
-Generates one-clock `startRead_ICM` and `startRead_Intan` pulses while acquisition is enabled. It keeps independent previous-sample timestamps for the ICM and Intan paths and advances them by the ideal configured periods, rather than by read completion time. This keeps the two schedules phase-locked and avoids long-term drift from read latency.
-
-### `stopwatch_64.sv`
-
-A simple 64-bit free-running timestamp counter in the PL clock domain. It resets to zero on core reset and increments once per fabric clock. At 125 MHz, wraparound is practically irrelevant for lab captures.
-
-### `ICM_reader.sv`
-
-SPI burst reader for ICM-20948 data. It drives a shared `sclk`, `mosi`, and active-low chip-select, and samples all `NUM_ICM` MISO lines in parallel. The default register address is `7'd45`, corresponding to ICM-20948 `ACCEL_XOUT_H`. Each frame captures:
-
-- Read start timestamp.
-- Read done timestamp.
-- One sensor ID and `ICM_DATA_BYTES` data bytes for each ICM channel.
-
-The SPI clock is generated from the PL clock using `SCLK_HALF_PERIOD_CYCLES`; the default is 63, approximately 1 MHz from 125 MHz.
-
-### `Intan_reader.sv`
-
-Synthetic Intan frame source used for packet-path and DMA-path validation before physical Intan hardware is connected. On each start pulse, it emits one frame after `DONE_DELAY_CYCLES`. Each channel gets a sensor ID and deterministic 32-bit words based on:
-
-```systemverilog
-sample_counter + sensor_idx * 32 + word_idx
-```
-
-This makes the Intan path useful for checking frame ordering, byte ordering, packet offsets, and dropped-frame behavior without depending on real Intan SPI hardware.
-
-### `packet_writer.sv`
-
-Builds fixed-size DMA packets. It accepts asynchronous frame-done pulses from the ICM and Intan readers, stores completed Intan frames in an internal byte FIFO, and starts a packet when:
-
-- An ICM frame is pending.
-- A full packet worth of FIFO space is available.
-- No previous output word is waiting.
-
-At packet start it snapshots the number of complete Intan frames currently available, then streams:
-
-1. The snapshotted Intan frames.
-2. The ICM frame.
-3. Zero padding through byte offset `PACKET_TRAILER_OFFSET_BYTES`.
-4. A 256 byte metadata trailer.
-
-Important implementation details:
-
-- The Intan byte FIFO is marked as distributed RAM so the combinational read model matches synthesis.
-- The 1024-bit output word is built with a shift-register packer instead of a dynamic byte-lane part-select.
-- The trailer is generated by a combinational byte serializer rather than by writing many bytes into an unpacked memory or relying on packed-struct byte slicing.
-
-Those choices avoid Vivado synthesis pitfalls that can otherwise pass behavioral simulation while corrupting byte lanes or trailer fields in hardware.
-
-### `packet_buffer.sv`
-
-Synchronous BRAM FIFO for full packet words. It stores `DATA_WIDTH`-bit words and tracks the exact word count. In addition to ordinary `empty` and `full`, it reports:
-
-- `packet_space`: at least one complete packet can still be written.
-- `packet_available`: at least one complete packet is ready to be read.
-
-The complete-packet signals prevent AXI streaming from starting before the writer has committed a whole fixed-size packet.
-
-### `packet_to_axis.sv`
-
-Reads complete packets out of `packet_buffer` and drives an AXI4-Stream master interface. Because the FIFO has synchronous read latency, the state machine explicitly requests a word, waits for the read data, captures it, then presents it with `m_axis_tvalid`. It asserts `m_axis_tlast` on the final packet word and sets `m_axis_tkeep` from `PACKET_LAST_BYTES`.
-
-### `SPI_mux.sv`
-
-Arbitrates the physical ICM SPI bus between:
-
-- The acquisition `ICM_reader`.
-- The AXI Quad SPI core controlled by software.
-
-When `axi_enable` is asserted and the acquisition reader is not busy, the external bus is driven by the AXI SPI signals. Otherwise, the acquisition reader owns the bus. The AXI path sees only `spi_miso[0]`; the acquisition path receives all configured MISO lines.
-
-### `axil_regs.v`
-
-Thin wrapper around the generated/custom AXI4-Lite slave implementation. It exposes friendly signal names to `ctrlsys_core` and instantiates `axil_regs_slave_lite_v1_0_S00_AXI`.
-
-### `axil_regs_slave_lite_v1_0_S00_AXI.v`
-
-AXI4-Lite slave register file. It accepts independent AW and W handshakes, supports byte strobes for writable registers, emits one-cycle command pulses, and multiplexes status/debug registers onto the read data bus. It implements the register map documented above.
-
-## HDL Tests
-
-### `source/tests/hdl/packet_path_layout_tb.sv`
-
-End-to-end packet-path regression for:
-
-```text
-packet_writer -> packet_buffer -> packet_to_axis
-```
-
-It creates deterministic Intan and ICM frames, captures the AXI stream bytes, and checks packet length, FIFO errors, trailer magic, trailer size, packet size, and trailer start offset.
-
-Run:
-
-```powershell
+```sh
 vivado -mode batch -source source/scripts/run_packet_path_layout_tb.tcl
+vivado -mode batch -source source/scripts/run_integrate_intan_packet_path_layout_tb.tcl
+vivado -mode batch -source source/scripts/run_ctrlsys_core_tb.tcl
 ```
 
-Expected:
+The full-core test uses AXI-Lite BFM tasks and eight RHD2164 models and stops at AXI4-Stream; it does not instantiate Xilinx DMA. `check_hdl.tcl` and `check_synth_util.tcl` contain `synth_design` and are intentionally not part of the pre-synthesis regression commands.
 
-```text
-PASS packet_path_layout_tb
-```
-
-### `source/tests/hdl/packet_to_axis_packet_available_tb.sv`
-
-Regression for complete-packet gating. It verifies that `packet_to_axis` does not begin streaming just because the FIFO is nonempty; it waits for `packet_available`, meaning a full fixed-size packet has been written.
-
-### `source/tests/hdl/SPI_path_tb.sv`
-
-SPI path testbench for basic bus/read behavior with a small sensor count and short data payload. Useful for checking SPI timing and muxed readback behavior independently of the full packet path.
-
-## Vivado Build Flow
-
-Run these from the repository root in a shell with Vivado on `PATH`.
-
-Check RTL elaboration:
-
-```powershell
-vivado -mode batch -source source/scripts/check_hdl.tcl
-```
-
-Run packet layout simulation:
-
-```powershell
-vivado -mode batch -source source/scripts/run_packet_path_layout_tb.tcl
-```
-
-Repackage the custom IP:
-
-```powershell
-vivado -mode batch -source source/scripts/repackage_ctrlsys_core_ip.tcl
-```
-
-Rebuild the Vivado bitstream:
-
-```powershell
-vivado -mode batch -source source/scripts/rebuild_bitstream.tcl
-```
-
-Convert the `.bit` to a Red Pitaya-friendly `.bit.bin`:
-
-```powershell
-vivado -mode batch -source source/scripts/bit2bin-bit.tcl
-```
-
-Primary generated artifacts:
-
-```text
-build/design_1_wrapper.bit
-build/design_1_wrapper.bit.bin
-```
-
-## Vivado Helper Scripts
-
-| Script | Purpose |
-| --- | --- |
-| `source/scripts/check_hdl.tcl` | Creates an in-memory project, reads RTL, and runs `synth_design -rtl` on `ctrlsys_core`. |
-| `source/scripts/run_packet_path_layout_tb.tcl` | Creates a temporary simulation project and runs the packet path regression. |
-| `source/scripts/repackage_ctrlsys_core_ip.tcl` | Rebuilds `IP/ctrlsys_core` from the current RTL and configures Vivado IP metadata. |
-| `source/scripts/rebuild_bitstream.tcl` | Opens the Vivado project, refreshes the custom IP, reruns synthesis/implementation, writes the bitstream, and copies it into `build`. |
-| `source/scripts/bit2bin-bit.tcl` | Uses `bootgen` to convert the newest bitstream into `.bit.bin` for Red Pitaya loading. |
-| `source/scripts/generate_constraints.tcl` | Generates or updates project-level board constraints. |
-| `source/scripts/set_axi_spi_clock.tcl` | Utility for AXI Quad SPI clock configuration. |
-| `source/scripts/check_synth_util.tcl` | Utility script for synthesis utilization checks. |
-| `source/scripts/check_packet_buffer_util.tcl` | Utility script focused on packet-buffer resource use. |
-
-## Red Pitaya Software
-
-The Red Pitaya userspace programs live under `source/cpp/redpitaya`.
-
-Compile the current end-to-end test directly from source on the Red Pitaya:
+Host-side checks:
 
 ```sh
-cd source/cpp/redpitaya
-gcc -O2 -Wall -Wextra -Wpedantic -std=c11 \
-    -o intan8_icm4_dma_interrupt_test \
-    intan8_icm4_dma_interrupt_test.c sensor_test_hw.c
+python3 -m py_compile source/python/analyze_dma_csv.py \
+  source/python/generate_packet_layout.py source/python/redpitaya_dma_receiver.py
+gcc -std=c11 -Wall -Wextra -Wpedantic -fsyntax-only source/cpp/redpitaya/*.c
 ```
 
-Other test binaries can be compiled the same way:
+## Remaining board-integration work
 
-```sh
-gcc -O2 -Wall -Wextra -Wpedantic -std=c11 \
-    -o single_sensor_test single_sensor_test.c sensor_test_hw.c
+The following steps are deliberately user-owned and have not been run here:
 
-gcc -O2 -Wall -Wextra -Wpedantic -std=c11 \
-    -o dma_interrupt_test dma_interrupt_test.c sensor_test_hw.c
-
-gcc -O2 -Wall -Wextra -Wpedantic -std=c11 \
-    -o ICM_Intan_test ICM_Intan_test.c sensor_test_hw.c
-```
-
-Important files:
-
-| File | Purpose |
-| --- | --- |
-| `sensor_test_hw.c/.h` | Common low-level helpers for `/dev/mem`, AXI-Lite registers, AXI DMA, UIO interrupts, TCP streaming, ICM initialization, and DMA buffer setup. |
-| `intan8_icm4_dma_interrupt_test.c` | Main current end-to-end test for 8 synthetic Intan channels + 4 ICM channels. Streams fixed-size 24,576 byte DMA packets over TCP. |
-| `single_sensor_test.c` | Older/smaller single ICM bring-up test that can compare AXI-Lite data and DMA data. |
-| `dma_interrupt_test.c` | DMA interrupt test harness. |
-| `ICM_Intan_test.c` | ICM + Intan oriented test harness. |
-
-Typical current run on the Red Pitaya:
-
-```sh
-./intan8_icm4_dma_interrupt_test --phys 0x1000000 --count 0
-```
-
-The `--phys 0x1000000` address is commonly the Red Pitaya Deep Memory Mode reserved region. The program can also use `u-dma-buf` if configured.
-
-## Desktop Python Tools
-
-| File | Purpose |
-| --- | --- |
-| `source/python/redpitaya_dma_receiver.py` | TCP client that receives Red Pitaya DMA packets, reconstructs packet bytes from DMA words, decodes trailers/payloads, prints raw bytes, writes CSVs, and can plot timing. |
-| `source/python/analyze_dma_csv.py` | Analyzes CSV captures for PC inter-arrival timing, FPGA timestamp interval, latency, read duration, and sequence/count anomalies. |
-| `source/python/generate_packet_layout.py` | Generates an HTML/SVG visualization of packet layout from the SystemVerilog configuration. |
-
-Trailer-only verification:
-
-```powershell
-python source/python/redpitaya_dma_receiver.py rp-f0f85a --count 100 --quiet --print-trailer --print-packets 100
-```
-
-Raw packet inspection:
-
-```powershell
-python source/python/redpitaya_dma_receiver.py rp-f0f85a --count 1 --quiet --print-raw-bytes --raw-bytes-per-line 128
-```
-
-Decoded payload spot check:
-
-```powershell
-python source/python/redpitaya_dma_receiver.py rp-f0f85a --count 1 --quiet --print-sensor-data
-```
-
-Long timing capture:
-
-```powershell
-python source/python/redpitaya_dma_receiver.py rp-f0f85a --count 10000 --quiet --csv build/dma_10k.csv
-python source/python/analyze_dma_csv.py build/dma_10k.csv --expected-ms 1.0
-```
-
-## Validation Checklist
-
-For the current synthetic-Intan setup, a healthy run should show:
-
-- TCP receiver connects and selects DMA word byte order `little`.
-- Packet sequence numbers increment by one.
-- UIO interrupt count increments by one per packet.
-- Core packet count increments by one per FPGA packet. If a desktop receiver connects to an already-running Red Pitaya process, the first reported IRQ may be nonzero.
-- Trailer magic is `ff ff ff ff ff ff ff ff`.
-- `trailer_bytes=256`.
-- `packet_bytes=24576`.
-- `trailer_offset=24320`.
-- `frame_words=6144`.
-- Steady-state `intan_frame_count` is usually 30.
-- Occasional 31-frame packets are valid because `125000 / 30` is truncated to 4166 ticks, making the synthetic Intan schedule slightly faster than exactly 30 kHz.
-- `icm_frame_count=1`.
-- `dropped_intan=0`, `dropped_icm=0`, and `flags=0`.
-- Intan offsets are multiples of 536.
-- ICM offset equals `intan_frame_count * 536`.
-- `valid_data_bytes` equals `intan_frame_count * 536 + 100`.
-- Synthetic Intan frame 0 sensor IDs decode as physical order `[7, 6, 5, 4, 3, 2, 1, 0]`.
-
-With only two physical ICM sensors connected and the other MISO pins floating, the disconnected ICM channels may decode as all `ff` or noisy-looking data. That is expected and should be judged separately from packet/trailer integrity.
-
-## Device Tree and Constraints
-
-`source/redpitaya` contains device tree overlay sources used to expose the DMA interrupt and memory-related resources to Linux:
-
-| File | Purpose |
-| --- | --- |
-| `dma_irq_uio_overlay.dts` | UIO overlay for the DMA interrupt path. |
-| `dtraw.dts` | Raw/device-tree bring-up source. |
-
-`source/constraints/CtrlSysV4.xdc` contains project-level constraints, including board-specific pins and clocking. The custom IP package intentionally avoids board pin constraints; those stay in the Vivado project.
-
-## Common Bring-Up Sequence
-
-1. Rebuild and upload `build/design_1_wrapper.bit.bin` to the Red Pitaya.
-2. Compile the Red Pitaya C test program directly with `gcc`.
-3. Start the Red Pitaya interrupt DMA streamer.
-4. Start the desktop Python receiver.
-5. Verify trailers with `--print-trailer`.
-6. Spot-check synthetic Intan payload with `--print-sensor-data`.
-7. Run a long CSV capture and analyze timing/anomalies.
-
-Example:
-
-```sh
-# Red Pitaya
-cd ~/gordo/cpp
-./intan8_icm4_dma_interrupt_test --phys 0x1000000 --count 0
-```
-
-```powershell
-# Desktop
-python source/python/redpitaya_dma_receiver.py rp-f0f85a --count 100 --quiet --print-trailer --print-packets 100
-python source/python/redpitaya_dma_receiver.py rp-f0f85a --count 10000 --quiet --csv build/dma_10k.csv
-python source/python/analyze_dma_csv.py build/dma_10k.csv --expected-ms 1.0
-```
-
-## Notes on Synthesis-Safe Packet Construction
-
-This project relies on exact byte ordering. A few implementation patterns are intentionally conservative:
-
-- Avoid packed-struct trailer serialization in synthesized packet output logic.
-- Avoid bulk writes to an unpacked trailer byte memory in one clock.
-- Avoid variable byte-lane writes into a 1024-bit output word.
-- Use a combinational trailer byte serializer and a shift-register output packer.
-- Wait for a complete packet in `packet_buffer` before `packet_to_axis` begins streaming.
-
-These choices are important because some dynamic part-select and inferred-memory patterns can pass behavioral simulation while producing incorrect packet bytes in hardware.
+1. Run `repackage_ctrlsys_core_ip.tcl` to regenerate the packaged IP from `source/hdl`.
+2. Upgrade/replace the core instance in the Vivado block design and expose the new Intan physical ports.
+3. Connect the external shared SCLK/MOSI/CS and eight individual MISO nets.
+4. Add board-specific XDC package-pin and electrical constraints; no pin assignments are invented here.
+5. Confirm the block design supplies the same 125 MHz clock to `clk` and AXI-Lite, or address CDC explicitly if that is changed.
+6. Run synthesis, inspect inferred memory/resources, close timing, implement, and generate the bitstream.
+7. Bring up one sensor first, verify physical SPI timing/signal integrity, then expand to all sensors and validate sustained DMA operation.

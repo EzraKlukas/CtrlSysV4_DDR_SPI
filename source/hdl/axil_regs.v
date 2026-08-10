@@ -25,6 +25,9 @@ module axil_regs #
     input  wire [31:0] sample_count,
     input  wire [31:0] error_code,
     input  wire [3:0]  state,
+    input  wire [31:0] ext_status,
+    input  wire [31:0] missed_intan_count,
+    input  wire [31:0] missed_icm_count,
 
     // FPGA-side packet/data inputs
     input  wire [31:0] data_word0,
@@ -107,6 +110,9 @@ axil_regs_slave_lite_v1_0_S00_AXI #(
     .sample_count         (sample_count),
     .error_code           (error_code),
     .state                (state),
+    .ext_status           (ext_status),
+    .missed_intan_count   (missed_intan_count),
+    .missed_icm_count     (missed_icm_count),
 
     .data_word0           (data_word0),
     .data_word1           (data_word1),

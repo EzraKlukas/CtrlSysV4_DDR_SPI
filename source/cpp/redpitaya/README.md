@@ -1,5 +1,13 @@
 # Red Pitaya single-sensor test
 
+The single-sensor utility below is the legacy ICM bring-up path. For the
+combined production stream, `intan8_icm4_dma_interrupt_test` uses a fixed
+24,576-byte packet containing real 1,048-byte RHD2164 frames plus the 100-byte
+ICM frame. Its interrupt loop initializes the core once, waits for Intan
+initialization, arms S2MM, enables acquisition once, and re-arms DMA after each
+completion without resetting or reinitializing the core. See the repository
+root README for the packet layout and AXI-Lite register map.
+
 This program tests one acquisition through both the CtrlSys AXI-Lite registers
 and the AXI DMA S2MM path. It expects the current block-design addresses:
 

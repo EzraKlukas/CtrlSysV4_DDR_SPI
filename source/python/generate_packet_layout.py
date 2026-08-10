@@ -588,7 +588,8 @@ def main() -> None:
         "NUM_ICM",
         "NUM_INTAN",
         "ICM_DATA_BYTES",
-        "INTAN_DATA_BYTES",
+        "INTAN_BITS_PER_WORD",
+        "INTAN_CHANNELS",
         "INTAN_SAMPLING_RATIO",
         "AXIS_DATA_WIDTH",
     ]
@@ -597,6 +598,8 @@ def main() -> None:
         raise SystemExit(f"missing constants in {config_path}: {', '.join(missing)}")
     if constants["AXIS_DATA_WIDTH"] % 8 != 0:
         raise SystemExit("AXIS_DATA_WIDTH must be byte-aligned")
+    if constants["INTAN_BITS_PER_WORD"] % 8 != 0:
+        raise SystemExit("INTAN_BITS_PER_WORD must be byte-aligned")
 
     trailer_bytes = args.trailer_bytes
     if trailer_bytes is None:

@@ -49,16 +49,16 @@ end
 logic [PTR_WIDTH-1:0] wptr;
 logic [PTR_WIDTH-1:0] rptr;
 logic [COUNT_WIDTH-1:0] count;
-logic [COUNT_WIDTH:0] free_words;
+logic [COUNT_WIDTH-1:0] free_words;
 
 wire do_write;
 wire do_read;
 
 assign empty = count == 0;
-assign full = count == DEPTH_WORDS;
-assign free_words = DEPTH_WORDS - count;
-assign packet_space = free_words >= PACKET_WORDS;
-assign packet_available = count >= PACKET_WORDS;
+assign full = count == COUNT_WIDTH'(DEPTH_WORDS);
+assign free_words = COUNT_WIDTH'(DEPTH_WORDS) - count;
+assign packet_space = free_words >= COUNT_WIDTH'(PACKET_WORDS);
+assign packet_available = count >= COUNT_WIDTH'(PACKET_WORDS);
 assign do_write = wr_en && !full;
 assign do_read = rd_en && !empty;
 
@@ -77,7 +77,7 @@ always_ff @(posedge clk) begin
         if (do_write) begin
             mem[wptr] <= wr_data;
 
-            if (wptr == DEPTH_WORDS - 1)
+            if (wptr == PTR_WIDTH'(DEPTH_WORDS - 1))
                 wptr <= '0;
             else
                 wptr <= wptr + 1'b1;
@@ -86,7 +86,7 @@ always_ff @(posedge clk) begin
         if (do_read) begin
             rd_data <= mem[rptr];
 
-            if (rptr == DEPTH_WORDS - 1)
+            if (rptr == PTR_WIDTH'(DEPTH_WORDS - 1))
                 rptr <= '0;
             else
                 rptr <= rptr + 1'b1;

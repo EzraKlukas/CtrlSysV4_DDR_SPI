@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+import config_pkg::*;
+
 module ctrlsys_core (
     input logic clk,
     input logic rst_n,
@@ -8,6 +10,11 @@ module ctrlsys_core (
     output logic               spi_mosi,
     output logic               spi_cs_n,
     input  logic [NUM_ICM-1:0] spi_miso,
+
+    output logic intan_sclk,
+    output logic intan_mosi,
+    output logic intan_cs_n,
+    input logic [config_pkg::NUM_INTAN-1:0] intan_miso,
 
     output logic axi_spi_io0_i,
     input  logic axi_spi_io0_o,
@@ -53,21 +60,39 @@ module ctrlsys_core (
 
     localparam logic [6:0] SPI_REG_ADDR = 7'd45;
     localparam int MAX_COMMANDS = 34;
+    localparam logic [31:0] ERR_FIFO_OVERFLOW = 32'h0000_0001;
+    localparam logic [31:0] ERR_FIFO_UNDERFLOW = 32'h0000_0002;
+    localparam logic [31:0] ERR_INTAN_INIT = 32'h0000_0004;
+    localparam logic [31:0] ERR_MISSED_INTAN = 32'h0000_0008;
+    localparam logic [31:0] ERR_MISSED_ICM = 32'h0000_0010;
 
     initial begin
         if (BUFFER_SIZE < 1) $error("ctrlsys_core requires BUFFER_SIZE >= 1");
         if (AXIS_DATA_WIDTH < 8 || (AXIS_DATA_WIDTH % 8) != 0)
             $error("ctrlsys_core AXIS_DATA_WIDTH must be a positive byte multiple");
+        if (PACKET_BYTES % (AXIS_DATA_WIDTH / 8) != 0)
+            $error("ctrlsys_core PACKET_BYTES must align to AXI stream word width");
+        if (MAX_INTAN_FRAMES_PER_PACKET < EXPECTED_INTAN_FRAMES_PER_PACKET)
+            $error("ctrlsys_core packet cannot hold the nominal Intan frames per ICM period");
+        if (INTAN_FRAME_BYTES != 1048)
+            $error("ctrlsys_core production Intan frame must be 1048 bytes");
+        if (ICM_FRAME_BYTES != 100)
+            $error("ctrlsys_core production ICM frame must be 100 bytes");
+        if (PACKET_TRAILER_OFFSET_BYTES < ICM_FRAME_BYTES + INTAN_FRAME_BYTES)
+            $error("ctrlsys_core packet data region cannot hold one Intan and one ICM frame");
     end
 
     logic [63:0] timestamp;
     logic start_read_icm;
     logic start_init_intan;
     logic start_read_intan;
-    logic read_mode_intan;
+    logic intan_initialized;
+    logic init_done_pulse_intan;
+    logic frame_done_pulse_intan;
 
     logic spi_start;
     logic core_rst;
+    logic packet_path_rst;
 
     logic [6:0] init_list_len;
     logic [MAX_COMMANDS-1:0][INTAN_BITS_PER_WORD-1:0] init_cmd_list;
@@ -78,12 +103,7 @@ module ctrlsys_core (
     logic [MAX_COMMANDS-1:0][INTAN_BITS_PER_WORD-1:0] acq_cmd_list;
 
     logic error_intan;
-    logic intan_sclk;
-    logic intan_mosi;
-    logic intan_cs_n;
-    logic [NUM_INTAN-1:0] intan_miso;
     logic intan_busy;
-    logic done_pulse_intan;
 
     config_pkg::ICM_frame_t icm_frame;
     config_pkg::ICM_frame_t debug_icm_frame;
@@ -123,6 +143,12 @@ module ctrlsys_core (
     logic error_latched;
     logic [31:0] sample_count;
     logic [31:0] error_code;
+    logic [31:0] ext_status;
+    logic [31:0] missed_icm_count;
+    logic [31:0] missed_intan_count;
+    logic [31:0] missed_icm_count_d;
+    logic [31:0] missed_intan_count_d;
+    logic [31:0] error_events;
     logic [31:0] data_word0;
     logic [31:0] data_word1;
     logic [31:0] data_word2;
@@ -131,8 +157,6 @@ module ctrlsys_core (
     logic [31:0] data_word5;
     logic [31:0] data_word6;
     logic [31:0] data_word7;
-
-    integer frame_sensor_index;
 
     logic rst_meta;
     logic rst_sync;
@@ -147,14 +171,34 @@ module ctrlsys_core (
     end
 
     assign core_rst = rst_sync || axil_soft_reset;
+    assign packet_path_rst = core_rst || !axil_enable;
     assign spi_start = start_read_icm && !axil_use_axi && !spi_busy;
     assign axi_spi_io0_i = axi_spi_io0_o;
     assign axi_spi_io1_i = axi_spi_miso;
     assign axi_spi_sck_i = axi_spi_sck_o;
     assign axi_spi_ss_i = axi_spi_ss_o;
     assign icm_sample_period = {32'b0, axil_sample_period};
-    assign intan_sample_period = {32'b0, axil_sample_period} / INTAN_SAMPLING_RATIO;
+    assign intan_sample_period =
+        {32'b0, axil_sample_period} / 64'(INTAN_SAMPLING_RATIO);
     assign packet_fifo_wr_en = packet_writer_word_valid && !packet_fifo_full;
+    assign ext_status = {
+        16'b0,
+        missed_icm_count != 0,
+        missed_intan_count != 0,
+        error_code[1],
+        error_code[0],
+        axil_enable && intan_initialized,
+        error_code[2],
+        intan_busy,
+        intan_initialized,
+        8'b0
+    };
+    assign error_events =
+        (packet_fifo_overflow ? ERR_FIFO_OVERFLOW : 32'b0) |
+        (packet_fifo_underflow ? ERR_FIFO_UNDERFLOW : 32'b0) |
+        (error_intan ? ERR_INTAN_INIT : 32'b0) |
+        ((missed_intan_count != missed_intan_count_d) ? ERR_MISSED_INTAN : 32'b0) |
+        ((missed_icm_count != missed_icm_count_d) ? ERR_MISSED_ICM : 32'b0);
 
     axil_regs u_axil_regs (
         .enable(axil_enable),
@@ -171,6 +215,9 @@ module ctrlsys_core (
         .sample_count(sample_count),
         .error_code(error_code),
         .state({2'b0, spi_busy, axil_use_axi}),
+        .ext_status(ext_status),
+        .missed_intan_count(missed_intan_count),
+        .missed_icm_count(missed_icm_count),
         .data_word0(data_word0),
         .data_word1(data_word1),
         .data_word2(data_word2),
@@ -211,12 +258,18 @@ module ctrlsys_core (
     acquisition_controller u_acquisition_controller (
         .clk(clk),
         .rst(core_rst),
+        .intan_initialized(intan_initialized),
+        .intan_busy(intan_busy),
+        .icm_busy(spi_busy),
         .enable(axil_enable),
         .timestamp(timestamp),
         .sample_period_ICM(icm_sample_period),
         .sample_period_Intan(intan_sample_period),
+        .startInit_Intan(start_init_intan),
         .startRead_ICM(start_read_icm),
-        .startRead_Intan(start_read_intan)
+        .startRead_Intan(start_read_intan),
+        .missedRead_ICM_count(missed_icm_count),
+        .missedRead_Intan_count(missed_intan_count)
     );
 
     ICM_reader #(
@@ -235,12 +288,25 @@ module ctrlsys_core (
         .cs_n(spi_reader_cs_n)
     );
 
+    intan_program #(
+        .MAX_COMMANDS(MAX_COMMANDS),
+        .NUM_INTAN(NUM_INTAN),
+        .BITS_PER_WORD(INTAN_BITS_PER_WORD)
+    ) u_intan_program (
+        .init_list_len(init_list_len),
+        .init_cmd_list(init_cmd_list),
+        .expect_rx_ans_list_a(expect_rx_ans_list_a),
+        .expect_rx_ans_list_b(expect_rx_ans_list_b),
+        .acq_list_len(acq_list_len),
+        .acq_cmd_list(acq_cmd_list)
+    );
+
     intan_reader #(
         .MAX_COMMANDS(34),
         .NUM_INTAN(NUM_INTAN),
         .NUM_CHANNELS_PER_ADC(INTAN_CHANNELS / 2),
         .BITS_PER_WORD(INTAN_BITS_PER_WORD),
-        .SCLK_HALF_PERIOD_CYCLES(3),
+        .SCLK_HALF_PERIOD_CYCLES(INTAN_T_SCLK),
         .CS_TO_SCLK_CYCLES(INTAN_T_CS_1),
         .SCLK_TO_CS_CYCLES(INTAN_T_CS_2),
         .CS_HIGH_CYCLES(INTAN_T_CS_OFF)
@@ -250,7 +316,7 @@ module ctrlsys_core (
         .start_init(start_init_intan),
         .start_read(start_read_intan),
         .timestamp(timestamp),
-        .read_mode(read_mode_intan),
+        .initialized(intan_initialized),
         .init_list_len(init_list_len),
         .init_cmd_list(init_cmd_list),
         .expect_rx_ans_list_a(expect_rx_ans_list_a),
@@ -258,7 +324,8 @@ module ctrlsys_core (
         .acq_list_len(acq_list_len),
         .acq_cmd_list(acq_cmd_list),
         .intan_frame(intan_frame),
-        .done_pulse(done_pulse_intan),
+        .init_done_pulse(init_done_pulse_intan),
+        .frame_done_pulse(frame_done_pulse_intan),
         .busy(intan_busy),
         .error(error_intan),
         .intan_sclk(intan_sclk),
@@ -269,9 +336,9 @@ module ctrlsys_core (
 
     packet_writer u_packet_writer (
         .clk(clk),
-        .rst(core_rst || !axil_enable),
+        .rst(packet_path_rst),
         .ICM_frame_done(spi_done),
-        .Intan_frame_done(done_pulse_intan),
+        .Intan_frame_done(frame_done_pulse_intan),
         .ICM_frame_in(icm_frame),
         .Intan_frame_in(intan_frame),
         .packet_ready(packet_fifo_packet_space),
@@ -305,6 +372,8 @@ module ctrlsys_core (
             sample_count    <= 32'b0;
             error_latched   <= 1'b0;
             error_code      <= 32'b0;
+            missed_icm_count_d <= 32'b0;
+            missed_intan_count_d <= 32'b0;
             packet_done_irq <= 1'b0;
             debug_icm_frame <= '0;
             data_word0      <= 32'b0;
@@ -317,8 +386,11 @@ module ctrlsys_core (
             data_word7      <= 32'b0;
         end else begin
             if (axil_clear_error) begin
-                error_latched <= 1'b0;
-                error_code    <= 32'b0;
+                error_latched <= error_events != 0;
+                error_code    <= error_events;
+            end else if (error_events != 0) begin
+                error_latched <= 1'b1;
+                error_code <= error_code | error_events;
             end
 
             if (axil_cpu_clear_irq) packet_done_irq <= 1'b0;
@@ -327,10 +399,8 @@ module ctrlsys_core (
             if (axil_reset_sample_counter) sample_count <= 32'b0;
             else if (packet_writer_packet_done) sample_count <= sample_count + 1'b1;
 
-            if (packet_fifo_overflow || packet_fifo_underflow) begin
-                error_latched <= 1'b1;
-                error_code <= 32'h0000_0001;
-            end
+            missed_intan_count_d <= missed_intan_count;
+            missed_icm_count_d <= missed_icm_count;
 
             if (spi_done) debug_icm_frame <= icm_frame;
 
@@ -353,7 +423,7 @@ module ctrlsys_core (
         .PACKET_WORDS(PACKET_AXIS_WORDS)
     ) u_packet_buffer (
         .clk(clk),
-        .rst(core_rst),
+        .rst(packet_path_rst),
         .wr_en(packet_fifo_wr_en),
         .wr_data(packet_fifo_wr_data),
         .rd_en(packet_fifo_rd_en),
@@ -368,7 +438,7 @@ module ctrlsys_core (
 
     packet_to_axis u_packet_to_axis (
         .clk(clk),
-        .rst(core_rst),
+        .rst(packet_path_rst),
         .fifo_rd_en(packet_fifo_rd_en),
         .fifo_rd_data(packet_fifo_rd_data),
         .fifo_packet_available(packet_fifo_packet_available),

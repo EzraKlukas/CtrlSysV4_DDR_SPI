@@ -59,7 +59,10 @@ module intan_acq_engine_tb;
     logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_b;
     logic done_seq_pulse;
 
-    logic done;
+    logic initialized;
+    logic init_done_pulse;
+    logic frame_done_pulse;
+    logic busy;
     logic err;
 
     // intan_cmd_sequencer
@@ -160,6 +163,7 @@ module intan_acq_engine_tb;
         .start_init(start_init),
         .start_read(start_read),
         .timestamp(timestamp),
+        .initialized(initialized),
         .Intan_frame(Intan_frame),
         .init_list_len(init_list_len),
         .init_cmd_list(init_cmd_list),
@@ -173,7 +177,9 @@ module intan_acq_engine_tb;
         .rx_ans_list_a(rx_ans_list_a),
         .rx_ans_list_b(rx_ans_list_b),
         .done_seq_pulse(done_seq_pulse),
-        .done(done),
+        .init_done_pulse(init_done_pulse),
+        .frame_done_pulse(frame_done_pulse),
+        .busy(busy),
         .err(err)
     );
 
@@ -322,12 +328,16 @@ module intan_acq_engine_tb;
         $display("Initing!");
         @(posedge done_seq_pulse);
         assert_init_lists();
+        @(posedge init_done_pulse);
+        if (!initialized) fail("init_done_pulse did not leave initialized high");
         $display("Ready to read!");
         @(posedge clk);
         pulse_start_read();
         $display("Reading!");
         @(posedge done_seq_pulse);
         assert_acq_lists();
+        @(posedge frame_done_pulse);
+        if (!initialized) fail("frame_done_pulse occurred while initialized was low");
         repeat (1) @(posedge clk);
     endtask
 

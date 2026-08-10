@@ -10,7 +10,7 @@ module intan_acq_engine #(
     input logic start_read,
     input logic [63:0] timestamp,  // live timestamp!
 
-    output logic read_mode,
+    output logic initialized,
     output config_pkg::Intan_frame_t Intan_frame,
 
     // init specific
@@ -33,12 +33,11 @@ module intan_acq_engine #(
     input logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_ans_list_b,
     input logic done_seq_pulse,
 
-    output logic done,
+    output logic init_done_pulse,
+    output logic frame_done_pulse,
     output logic busy,
     output logic err
 );
-    // I should be forming the command list at this point!
-
     typedef enum logic [2:0] {
         ST_PRE_INIT,
         ST_INITING,
@@ -49,15 +48,24 @@ module intan_acq_engine #(
     } intan_frame_state_t;
 
     intan_frame_state_t intan_state;
+    localparam int CHANNEL_B_OFFSET = config_pkg::INTAN_CHANNELS / 2;
+
+    initial begin
+        if (NUM_CHAN > CHANNEL_B_OFFSET)
+            $error("intan_acq_engine NUM_CHAN exceeds one RHD2164 ADC bank");
+        if (BITS_PER_WORD != config_pkg::INTAN_BITS_PER_WORD)
+            $error("intan_acq_engine word width must match Intan_frame_t");
+    end
 
     integer sensor_idx;
     integer chan_idx;
     always_ff @(posedge clk) begin
         if (rst) begin
-            read_mode <= 1'b0;
+            initialized <= 1'b0;
             intan_state <= ST_PRE_INIT;
             busy <= 1'b0;
-            done <= 1'b0;
+            init_done_pulse <= 1'b0;
+            frame_done_pulse <= 1'b0;
             err <= 1'b0;
             cmd_list_len <= '0;
             tx_cmd_list <= '0;
@@ -69,41 +77,57 @@ module intan_acq_engine #(
                 Intan_frame.Intan_data[sensor_idx].data <= '0;
             end
         end else begin
+            init_done_pulse <= 1'b0;
+            frame_done_pulse <= 1'b0;
+            start_seq_pulse <= 1'b0;
+
             case (intan_state)
                 ST_PRE_INIT: begin
-                    done <= 1'b0;
-                    read_mode <= 1'b0;
+                    initialized <= 1'b0;
                     busy <= 1'b0;
 
                     if (start_init) begin
                         intan_state <= ST_INITING;
+                        busy <= 1'b1;
                         cmd_list_len <= init_list_len;
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
                         err <= 1'b0;
+                        initialized <= 1'b0;
                     end
                 end
                 ST_INITING: begin
-                    start_seq_pulse <= 1'b0;
                     busy <= 1'b1;
 
                     if (done_seq_pulse) begin
                         if (rx_ans_list_a == expect_rx_ans_list_a && rx_ans_list_b == expect_rx_ans_list_b) begin
                             intan_state <= ST_READ_READY;
-                            done <= 1'b1;
+                            init_done_pulse <= 1'b1;
+                            initialized <= 1'b1;
+                            busy <= 1'b0;
                         end else begin
                             intan_state <= ST_FAULT;
                             err <= 1'b1;
+                            initialized <= 1'b0;
+                            busy <= 1'b0;
                         end
                     end
                 end
                 ST_READ_READY: begin
-                    done <= 1'b0;
-                    read_mode <= 1'b1;
+                    initialized <= 1'b1;
                     busy <= 1'b0;
 
-                    if (start_read) begin
+                    if (start_init) begin
+                        intan_state <= ST_INITING;
+                        busy <= 1'b1;
+                        cmd_list_len <= init_list_len;
+                        tx_cmd_list <= init_cmd_list;
+                        start_seq_pulse <= 1'b1;
+                        err <= 1'b0;
+                        initialized <= 1'b0;
+                    end else if (start_read) begin
                         intan_state <= ST_READING;
+                        busy <= 1'b1;
                         cmd_list_len <= acq_list_len;
                         tx_cmd_list <= acq_cmd_list;
                         Intan_frame.init_read_ts <= timestamp;
@@ -115,20 +139,13 @@ module intan_acq_engine #(
                             Intan_frame.Intan_data[sensor_idx].data <= '0;
                         end
 
-                        start_seq_pulse <= 1'b1;  // sets off intan_cmd_sequencer.sv
-                    end else if (start_init) begin
-                        intan_state <= ST_INITING;
-                        cmd_list_len <= init_list_len;
-                        tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
-                        err <= 1'b0;
                     end
                 end
                 ST_READING: begin
-                    start_seq_pulse <= 1'b0;
                     busy <= 1'b1;
 
-                    if (done_seq_pulse && !start_seq_pulse) begin
+                    if (done_seq_pulse) begin
                         intan_state <= ST_DONE;
                         Intan_frame.done_read_ts <= timestamp;
 
@@ -139,23 +156,26 @@ module intan_acq_engine #(
                             // sensor_id already filled out in previous state.
                             for (chan_idx = 0; chan_idx < NUM_CHAN; chan_idx = chan_idx + 1) begin
                                 Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*chan_idx+:BITS_PER_WORD] <= rx_ans_list_a[chan_idx][sensor_idx];
-                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*(chan_idx+NUM_CHAN)+:BITS_PER_WORD] <= rx_ans_list_b[chan_idx][sensor_idx];
+                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*(chan_idx+CHANNEL_B_OFFSET)+:BITS_PER_WORD] <= rx_ans_list_b[chan_idx][sensor_idx];
                             end
                         end
                     end
                 end
                 ST_DONE: begin
-                    done <= 1'b1;
+                    frame_done_pulse <= 1'b1;
                     busy <= 1'b0;
+                    initialized <= 1'b1;
                     intan_state <= ST_READ_READY;
                 end
                 ST_FAULT: begin
+                    busy <= 1'b0;
+                    initialized <= 1'b0;
                     if (start_init) begin
                         intan_state <= ST_INITING;
+                        busy <= 1'b1;
                         cmd_list_len <= init_list_len;
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
-                        busy <= 1'b0;
                         err <= 1'b0;
                     end
                 end

@@ -87,7 +87,7 @@ module ICM_reader #(
             spi_clk_rising  <= 1'b0;
             spi_clk_falling <= 1'b0;
             if (tick_en) begin
-                if (tickCounter == SCLK_HALF_PERIOD_CYCLES - 1) begin
+                if (tickCounter == TICK_COUNTER_WIDTH'(SCLK_HALF_PERIOD_CYCLES - 1)) begin
                     tickCounter <= '0;
                     spi_tick <= ~spi_tick;
                     if (spi_tick == 1) begin
@@ -150,7 +150,7 @@ module ICM_reader #(
                         mosi_drive <= data_temp[counter];
                         if (counter == 0) begin
                             state <= WAIT_DATA;
-                            num_data_bytes <= ICM_DATA_BYTES - 1;
+                            num_data_bytes <= 8'(ICM_DATA_BYTES - 1);
                         end
                         counter <= counter - 3'b1;  // should reset counter to 7 after 0
                     end
@@ -168,18 +168,20 @@ module ICM_reader #(
                         for (
                             sensor_idx = 0; sensor_idx < NUM_ICM; sensor_idx = sensor_idx + 1
                         ) begin
-                            ICM_frame.ICM_data[sensor_idx].data[num_data_bytes*8+counter] <= miso[sensor_idx];
+                            ICM_frame.ICM_data[sensor_idx].data[
+                                num_data_bytes * 8'd8 + 8'(counter)
+                            ] <= miso[sensor_idx];
                         end
 
                         if (counter == 0) begin
-                            counter <= 7;  // reset counter
+                            counter <= 3'd7;  // reset counter
                             if (num_data_bytes == 0) begin
                                 state <= DONE;
                                 tick_en <= 1'b0;
                                 cs_drive <= 1'b1;
                                 ICM_frame.done_read_ts <= timestamp;
-                            end else num_data_bytes <= num_data_bytes - 1;
-                        end else counter <= counter - 1;
+                            end else num_data_bytes <= num_data_bytes - 8'd1;
+                        end else counter <= counter - 3'd1;
                     end
                 end
 

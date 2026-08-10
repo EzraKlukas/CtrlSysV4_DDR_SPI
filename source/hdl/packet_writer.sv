@@ -37,7 +37,6 @@ module packet_writer #(
     localparam int PACKET_TRAILER_BYTES = PACKET_TRAILER_BITS / 8;
     localparam int PACKET_TRAILER_OFFSET_BYTES = PACKET_BYTES - PACKET_TRAILER_BYTES;
     localparam int MAX_INTAN_FRAMES = config_pkg::MAX_INTAN_FRAMES_PER_PACKET;
-    localparam int TRAILER_INTAN_OFFSET_COUNT = config_pkg::PACKET_TRAILER_INTAN_OFFSET_COUNT;
     localparam int INTAN_FIFO_BYTES = MAX_INTAN_FRAMES * INTAN_FRAME_BYTES;
 
     localparam int BYTE_INDEX_WIDTH = (AXIS_BYTES > 1) ? $clog2(AXIS_BYTES) : 1;
@@ -92,7 +91,6 @@ module packet_writer #(
     logic [31:0] trailer_dropped_intan_frames;
     logic [31:0] trailer_dropped_icm_frames;
 
-    logic [INTAN_FRAME_COUNT_WIDTH-1:0] packet_intan_frames;
     logic [INTAN_PACKET_BYTE_COUNT_WIDTH-1:0] packet_intan_bytes;
     logic [INTAN_PACKET_BYTE_COUNT_WIDTH-1:0] intan_bytes_streamed;
     logic [INTAN_BYTE_INDEX_WIDTH-1:0] intan_byte_index;
@@ -133,6 +131,10 @@ module packet_writer #(
             $error("packet_writer PACKET_TRAILER_BYTES mismatch");
         if (INTAN_FIFO_BYTES < INTAN_FRAME_BYTES)
             $error("packet_writer packet is too small for one Intan frame");
+        if (MAX_INTAN_FRAMES < config_pkg::EXPECTED_INTAN_FRAMES_PER_PACKET)
+            $error("packet_writer packet cannot hold nominal Intan frames per packet");
+        if (PACKET_TRAILER_OFFSET_BYTES < ICM_FRAME_BYTES)
+            $error("packet_writer packet is too small for the ICM frame before the trailer");
         if ($bits(packet_trailer_t) != PACKET_TRAILER_BITS)
             $error("packet_writer PACKET_TRAILER_BITS mismatch");
     end
@@ -176,76 +178,56 @@ module packet_writer #(
             offset_value = 32'b0;
             trailer_byte_value = 8'h00;
 
-            case (byte_index)
-                8'd0, 8'd1, 8'd2, 8'd3, 8'd4, 8'd5, 8'd6, 8'd7: trailer_byte_value = 8'hff;
-
-                8'd8:  trailer_byte_value = trailer_packet_num[31:24];
-                8'd9:  trailer_byte_value = trailer_packet_num[23:16];
-                8'd10: trailer_byte_value = trailer_packet_num[15:8];
-                8'd11: trailer_byte_value = trailer_packet_num[7:0];
-
-                8'd14: trailer_byte_value = 8'h01;
-
-                8'd18: trailer_byte_value = 8'h60;
-
-                8'd20: trailer_byte_value = trailer_valid_data_bytes[31:24];
-                8'd21: trailer_byte_value = trailer_valid_data_bytes[23:16];
-                8'd22: trailer_byte_value = trailer_valid_data_bytes[15:8];
-                8'd23: trailer_byte_value = trailer_valid_data_bytes[7:0];
-
-                8'd24: trailer_byte_value = trailer_intan_frame_count[31:24];
-                8'd25: trailer_byte_value = trailer_intan_frame_count[23:16];
-                8'd26: trailer_byte_value = trailer_intan_frame_count[15:8];
-                8'd27: trailer_byte_value = trailer_intan_frame_count[7:0];
-
-                8'd31: trailer_byte_value = 8'h2d;
-
-                8'd35: trailer_byte_value = 8'h01;
-
-                8'd36: trailer_byte_value = trailer_icm_frame_start_index[31:24];
-                8'd37: trailer_byte_value = trailer_icm_frame_start_index[23:16];
-                8'd38: trailer_byte_value = trailer_icm_frame_start_index[15:8];
-                8'd39: trailer_byte_value = trailer_icm_frame_start_index[7:0];
-
-                8'd42: trailer_byte_value = 8'h5f;
-
-                8'd44: trailer_byte_value = trailer_flags[31:24];
-                8'd45: trailer_byte_value = trailer_flags[23:16];
-                8'd46: trailer_byte_value = trailer_flags[15:8];
-                8'd47: trailer_byte_value = trailer_flags[7:0];
-
-                8'd48: trailer_byte_value = trailer_dropped_intan_frames[31:24];
-                8'd49: trailer_byte_value = trailer_dropped_intan_frames[23:16];
-                8'd50: trailer_byte_value = trailer_dropped_intan_frames[15:8];
-                8'd51: trailer_byte_value = trailer_dropped_intan_frames[7:0];
-
-                8'd52: trailer_byte_value = trailer_dropped_icm_frames[31:24];
-                8'd53: trailer_byte_value = trailer_dropped_icm_frames[23:16];
-                8'd54: trailer_byte_value = trailer_dropped_icm_frames[15:8];
-                8'd55: trailer_byte_value = trailer_dropped_icm_frames[7:0];
-
-                default: begin
-                    if (byte_index >= 8'd56 && byte_index < PACKET_TRAILER_FIXED_BYTES) begin
-                        offset_index = (byte_index - 8'd56) >> 2;
-                        if (offset_index < trailer_intan_frame_count && offset_index < MAX_INTAN_FRAMES)
-                            offset_value = offset_index[31:0] * INTAN_FRAME_BYTES;
-                        trailer_byte_value = u32_be_byte(offset_value, byte_index[1:0]);
-                    end
+            if (byte_index < 8) begin
+                trailer_byte_value = 8'hff;
+            end else if (byte_index < 12) begin
+                trailer_byte_value = u32_be_byte(trailer_packet_num, byte_index[1:0]);
+            end else if (byte_index < 16) begin
+                trailer_byte_value = u32_be_byte(32'(PACKET_TRAILER_BYTES), byte_index[1:0]);
+            end else if (byte_index < 20) begin
+                trailer_byte_value = u32_be_byte(32'(PACKET_BYTES), byte_index[1:0]);
+            end else if (byte_index < 24) begin
+                trailer_byte_value = u32_be_byte(trailer_valid_data_bytes, byte_index[1:0]);
+            end else if (byte_index < 28) begin
+                trailer_byte_value = u32_be_byte(trailer_intan_frame_count, byte_index[1:0]);
+            end else if (byte_index < 32) begin
+                trailer_byte_value = u32_be_byte(32'(MAX_INTAN_FRAMES), byte_index[1:0]);
+            end else if (byte_index < 36) begin
+                trailer_byte_value = u32_be_byte(32'd1, byte_index[1:0]);
+            end else if (byte_index < 40) begin
+                trailer_byte_value = u32_be_byte(trailer_icm_frame_start_index, byte_index[1:0]);
+            end else if (byte_index < 44) begin
+                trailer_byte_value = u32_be_byte(32'(PACKET_TRAILER_OFFSET_BYTES), byte_index[1:0]);
+            end else if (byte_index < 48) begin
+                trailer_byte_value = u32_be_byte(trailer_flags, byte_index[1:0]);
+            end else if (byte_index < 52) begin
+                trailer_byte_value = u32_be_byte(trailer_dropped_intan_frames, byte_index[1:0]);
+            end else if (byte_index < 56) begin
+                trailer_byte_value = u32_be_byte(trailer_dropped_icm_frames, byte_index[1:0]);
+            end else if (byte_index < TRAILER_BYTE_INDEX_WIDTH'(PACKET_TRAILER_FIXED_BYTES)) begin
+                offset_index = (32'(byte_index) - 32'd56) >> 2;
+                if (offset_index < trailer_intan_frame_count && offset_index < MAX_INTAN_FRAMES) begin
+                    offset_value = offset_index[31:0] * INTAN_FRAME_BYTES;
                 end
-            endcase
+                trailer_byte_value = u32_be_byte(offset_value, byte_index[1:0]);
+            end
         end
     endfunction
 
     assign ready = packet_ready && state == IDLE && !icm_pending;
     assign can_pack_byte = !word_valid || word_ready;
     assign pack_word_with_byte = {source_byte, pack_word[DATA_WIDTH-1:8]};
-    assign emit_word = source_valid && (source_last || pack_byte_count == AXIS_BYTES - 1);
-    assign source_last = packet_byte_index == PACKET_BYTES - 1;
+    assign emit_word = source_valid &&
+        (source_last || pack_byte_count == BYTE_INDEX_WIDTH'(AXIS_BYTES - 1));
+    assign source_last = packet_byte_index == PACKET_BYTE_INDEX_WIDTH'(PACKET_BYTES - 1);
 
-    assign intan_fifo_write = serialize_valid && intan_byte_count < INTAN_FIFO_BYTES;
+    assign intan_fifo_write = serialize_valid &&
+        intan_byte_count < INTAN_FIFO_COUNT_WIDTH'(INTAN_FIFO_BYTES);
     assign intan_fifo_read = source_valid && can_pack_byte && state == STREAM_INTAN;
-    assign intan_frame_write_done = intan_fifo_write && serialize_byte_index == INTAN_FRAME_BYTES - 1;
-    assign intan_frame_read_done = intan_fifo_read && intan_byte_index == INTAN_FRAME_BYTES - 1;
+    assign intan_frame_write_done = intan_fifo_write &&
+        serialize_byte_index == INTAN_BYTE_INDEX_WIDTH'(INTAN_FRAME_BYTES - 1);
+    assign intan_frame_read_done = intan_fifo_read &&
+        intan_byte_index == INTAN_BYTE_INDEX_WIDTH'(INTAN_FRAME_BYTES - 1);
 
     assign snapshot_intan_bytes = complete_intan_frames * INTAN_FRAME_BYTES;
     assign snapshot_icm_offset = snapshot_intan_bytes;
@@ -307,7 +289,6 @@ module packet_writer #(
             trailer_flags <= 32'b0;
             trailer_dropped_intan_frames <= 32'b0;
             trailer_dropped_icm_frames <= 32'b0;
-            packet_intan_frames <= '0;
             packet_intan_bytes <= '0;
             intan_bytes_streamed <= '0;
             intan_byte_index <= '0;
@@ -324,7 +305,8 @@ module packet_writer #(
 
             if (Intan_frame_done) begin
                 if (!serialize_valid && !pending_intan_valid &&
-                (INTAN_FIFO_BYTES - intan_byte_count) >= INTAN_FRAME_BYTES) begin
+                (INTAN_FIFO_COUNT_WIDTH'(INTAN_FIFO_BYTES) - intan_byte_count) >=
+                    INTAN_FIFO_COUNT_WIDTH'(INTAN_FRAME_BYTES)) begin
                     serialize_frame <= Intan_frame_in;
                     serialize_valid <= 1'b1;
                     serialize_byte_index <= '0;
@@ -335,7 +317,8 @@ module packet_writer #(
                     dropped_intan_frames <= dropped_intan_frames + 1'b1;
                 end
             end else if (!serialize_valid && pending_intan_valid &&
-                     (INTAN_FIFO_BYTES - intan_byte_count) >= INTAN_FRAME_BYTES) begin
+                     (INTAN_FIFO_COUNT_WIDTH'(INTAN_FIFO_BYTES) - intan_byte_count) >=
+                         INTAN_FIFO_COUNT_WIDTH'(INTAN_FRAME_BYTES)) begin
                 serialize_frame <= pending_intan_frame;
                 pending_intan_valid <= 1'b0;
                 serialize_valid <= 1'b1;
@@ -345,23 +328,24 @@ module packet_writer #(
             if (intan_fifo_write) begin
                 intan_fifo[intan_wptr] <= intan_frame_byte(serialize_frame, serialize_byte_index);
 
-                if (intan_wptr == INTAN_FIFO_BYTES - 1) intan_wptr <= '0;
+                if (intan_wptr == INTAN_FIFO_PTR_WIDTH'(INTAN_FIFO_BYTES - 1)) intan_wptr <= '0;
                 else intan_wptr <= intan_wptr + 1'b1;
 
-                if (serialize_byte_index == INTAN_FRAME_BYTES - 1) begin
+                if (serialize_byte_index == INTAN_BYTE_INDEX_WIDTH'(INTAN_FRAME_BYTES - 1)) begin
                     serialize_byte_index <= '0;
                     serialize_valid <= 1'b0;
                 end else begin
                     serialize_byte_index <= serialize_byte_index + 1'b1;
                 end
-            end else if (serialize_valid && intan_byte_count == INTAN_FIFO_BYTES) begin
+            end else if (serialize_valid &&
+                         intan_byte_count == INTAN_FIFO_COUNT_WIDTH'(INTAN_FIFO_BYTES)) begin
                 serialize_valid <= 1'b0;
                 serialize_byte_index <= '0;
                 dropped_intan_frames <= dropped_intan_frames + 1'b1;
             end
 
             if (intan_fifo_read) begin
-                if (intan_rptr == INTAN_FIFO_BYTES - 1) intan_rptr <= '0;
+                if (intan_rptr == INTAN_FIFO_PTR_WIDTH'(INTAN_FIFO_BYTES - 1)) intan_rptr <= '0;
                 else intan_rptr <= intan_rptr + 1'b1;
             end
 
@@ -392,7 +376,6 @@ module packet_writer #(
 
             if (state == IDLE && packet_ready && icm_pending && !word_valid) begin
                 icm_pending <= 1'b0;
-                packet_intan_frames <= complete_intan_frames;
                 packet_intan_bytes <= snapshot_intan_bytes[INTAN_PACKET_BYTE_COUNT_WIDTH-1:0];
                 intan_bytes_streamed <= '0;
                 intan_byte_index <= '0;
@@ -407,11 +390,11 @@ module packet_writer #(
 
                 trailer_packet_num <= packet_counter;
                 trailer_valid_data_bytes <= snapshot_valid_data_bytes;
-                trailer_intan_frame_count <= complete_intan_frames;
+                trailer_intan_frame_count <= 32'(complete_intan_frames);
                 trailer_icm_frame_start_index <= snapshot_icm_offset;
                 trailer_flags <= {
                     29'b0,
-                    complete_intan_frames == MAX_INTAN_FRAMES,
+                    complete_intan_frames == INTAN_FRAME_COUNT_WIDTH'(MAX_INTAN_FRAMES),
                     dropped_icm_frames != 0,
                     dropped_intan_frames != 0
                 };
@@ -444,16 +427,18 @@ module packet_writer #(
                         STREAM_INTAN: begin
                             intan_bytes_streamed <= intan_bytes_streamed + 1'b1;
 
-                            if (intan_byte_index == INTAN_FRAME_BYTES - 1) intan_byte_index <= '0;
+                            if (intan_byte_index == INTAN_BYTE_INDEX_WIDTH'(INTAN_FRAME_BYTES - 1))
+                                intan_byte_index <= '0;
                             else intan_byte_index <= intan_byte_index + 1'b1;
 
                             if (intan_bytes_streamed == packet_intan_bytes - 1) state <= STREAM_ICM;
                         end
 
                         STREAM_ICM: begin
-                            if (icm_byte_index == ICM_FRAME_BYTES - 1) begin
+                            if (icm_byte_index == ICM_BYTE_INDEX_WIDTH'(ICM_FRAME_BYTES - 1)) begin
                                 icm_byte_index <= '0;
-                                if (packet_byte_index == PACKET_TRAILER_OFFSET_BYTES - 1)
+                                if (packet_byte_index ==
+                                    PACKET_BYTE_INDEX_WIDTH'(PACKET_TRAILER_OFFSET_BYTES - 1))
                                     state <= STREAM_TRAILER;
                                 else state <= STREAM_PADDING;
                             end else begin
@@ -462,12 +447,14 @@ module packet_writer #(
                         end
 
                         STREAM_PADDING: begin
-                            if (packet_byte_index == PACKET_TRAILER_OFFSET_BYTES - 1)
+                            if (packet_byte_index ==
+                                PACKET_BYTE_INDEX_WIDTH'(PACKET_TRAILER_OFFSET_BYTES - 1))
                                 state <= STREAM_TRAILER;
                         end
 
                         STREAM_TRAILER: begin
-                            if (trailer_byte_index == PACKET_TRAILER_BYTES - 1)
+                            if (trailer_byte_index ==
+                                TRAILER_BYTE_INDEX_WIDTH'(PACKET_TRAILER_BYTES - 1))
                                 trailer_byte_index <= '0;
                             else trailer_byte_index <= trailer_byte_index + 1'b1;
                         end

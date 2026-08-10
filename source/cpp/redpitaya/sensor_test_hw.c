@@ -22,19 +22,22 @@
 #define AXI_SPI_BASE    0x41e00000u
 #define MAP_SIZE        0x10000u
 
-#define CORE_CONTROL    0x00u
-#define CORE_PERIOD     0x04u
-#define CORE_COMMAND    0x0cu
-#define CORE_STATUS     0x10u
-#define CORE_COUNT      0x14u
-#define CORE_ERROR      0x1cu
-#define CORE_DATA0      0x20u
+#define CORE_CONTROL    SENSOR_TEST_CORE_CONTROL
+#define CORE_PERIOD     SENSOR_TEST_CORE_PERIOD
+#define CORE_COMMAND    SENSOR_TEST_CORE_COMMAND
+#define CORE_STATUS     SENSOR_TEST_CORE_STATUS
+#define CORE_COUNT      SENSOR_TEST_CORE_COUNT
+#define CORE_ERROR      SENSOR_TEST_CORE_ERROR
+#define CORE_DATA0      SENSOR_TEST_CORE_DATA0
 
-#define CONTROL_ENABLE  (1u << 0)
-#define CONTROL_RESET   (1u << 1)
-#define CONTROL_USE_AXI (1u << 2)
-#define COMMAND_CLEAR   ((1u << 0) | (1u << 1) | (1u << 2))
-#define STATUS_ERROR    (1u << 1)
+#define CONTROL_ENABLE  SENSOR_TEST_CONTROL_ENABLE
+#define CONTROL_RESET   SENSOR_TEST_CONTROL_RESET
+#define CONTROL_USE_AXI SENSOR_TEST_CONTROL_USE_AXI
+#define COMMAND_CLEAR   (SENSOR_TEST_COMMAND_CLEAR_ERROR | \
+                         SENSOR_TEST_COMMAND_RESET_SAMPLE_COUNT | \
+                         SENSOR_TEST_COMMAND_CLEAR_PACKET_IRQ)
+#define STATUS_ERROR    SENSOR_TEST_STATUS_ERROR
+#define STATUS_INTAN_INITIALIZED SENSOR_TEST_STATUS_INTAN_INITIALIZED
 
 #define S2MM_DMACR      0x30u
 #define S2MM_DMASR      0x34u
@@ -121,9 +124,9 @@
 #define FRAME_BYTES     (FRAME_WORDS * sizeof(uint32_t))
 #define SAMPLE_PERIOD   SENSOR_TEST_SAMPLE_CLOCK_HZ /* 1 s at runtime FCLK. */
 #define TIMEOUT_MS      2000u
-#define ICM_INTAN_PACKET_TRAILER_BYTES 256u
+#define ICM_INTAN_PACKET_TRAILER_BYTES SENSOR_TEST_PACKET_TRAILER_BYTES
 #define ICM_INTAN_PACKET_TRAILER_OFFSET \
-    (SENSOR_TEST_INTAN8_ICM4_PACKET_BYTES - ICM_INTAN_PACKET_TRAILER_BYTES)
+    SENSOR_TEST_PACKET_TRAILER_OFFSET
 #define ICM_INTAN_PACKET_TRAILER_WORD \
     (ICM_INTAN_PACKET_TRAILER_OFFSET / sizeof(uint32_t))
 
@@ -753,6 +756,159 @@ static int reset_s2mm_dma(volatile uint32_t *dma)
     return 0;
 }
 
+static int reset_configure_core_and_wait_intan(volatile uint32_t *core,
+                                                uint32_t sample_period_ticks)
+{
+    uint64_t deadline;
+    uint32_t status;
+
+    reg_write(core, CORE_CONTROL, CONTROL_RESET);
+    usleep(1000);
+    reg_write(core, CORE_CONTROL, 0);
+    reg_write(core, CORE_COMMAND, COMMAND_CLEAR);
+    reg_write(core, CORE_PERIOD, sample_period_ticks);
+
+    deadline = monotonic_ms() + TIMEOUT_MS;
+    do {
+        status = reg_read(core, CORE_STATUS);
+        if (status & STATUS_INTAN_INITIALIZED) {
+            /* A failed attempt may have succeeded on automatic retry. */
+            if (reg_read(core, CORE_ERROR) & SENSOR_TEST_ERROR_INTAN_INIT)
+                reg_write(core, CORE_COMMAND,
+                          SENSOR_TEST_COMMAND_CLEAR_ERROR);
+            return 0;
+        }
+        usleep(1000);
+    } while (monotonic_ms() < deadline);
+
+    fprintf(stderr,
+            "Intan initialization timed out: status=0x%08" PRIx32
+            " error=0x%08" PRIx32 " missed_intan=%" PRIu32
+            " missed_icm=%" PRIu32 "\n",
+            reg_read(core, CORE_STATUS), reg_read(core, CORE_ERROR),
+            reg_read(core, SENSOR_TEST_CORE_MISSED_INTAN),
+            reg_read(core, SENSOR_TEST_CORE_MISSED_ICM));
+    return -1;
+}
+
+static uint32_t read_be32_volatile(const volatile uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) |
+           ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) |
+           (uint32_t)bytes[3];
+}
+
+static int validate_intan_icm_packet(const volatile uint32_t *words,
+                                     size_t transfer_bytes)
+{
+    const volatile uint8_t *bytes = (const volatile uint8_t *)words;
+    const volatile uint8_t *trailer;
+    uint32_t valid_data_bytes;
+    uint32_t intan_count;
+    uint32_t max_intan_count;
+    uint32_t icm_count;
+    uint32_t icm_offset;
+    uint32_t trailer_offset;
+    uint32_t flags;
+    uint32_t dropped_intan;
+    uint32_t dropped_icm;
+    unsigned i;
+
+    if (transfer_bytes != SENSOR_TEST_INTAN8_ICM4_PACKET_BYTES)
+        return 0;
+
+    trailer = bytes + SENSOR_TEST_PACKET_TRAILER_OFFSET;
+    for (i = 0; i < 8u; ++i) {
+        if (trailer[i] != 0xffu) {
+            fprintf(stderr, "Packet trailer magic mismatch at byte %u.\n", i);
+            return -1;
+        }
+    }
+
+    valid_data_bytes = read_be32_volatile(trailer + 20u);
+    intan_count = read_be32_volatile(trailer + 24u);
+    max_intan_count = read_be32_volatile(trailer + 28u);
+    icm_count = read_be32_volatile(trailer + 32u);
+    icm_offset = read_be32_volatile(trailer + 36u);
+    trailer_offset = read_be32_volatile(trailer + 40u);
+    flags = read_be32_volatile(trailer + 44u);
+    dropped_intan = read_be32_volatile(trailer + 48u);
+    dropped_icm = read_be32_volatile(trailer + 52u);
+
+    if (read_be32_volatile(trailer + 12u) != SENSOR_TEST_PACKET_TRAILER_BYTES ||
+        read_be32_volatile(trailer + 16u) != SENSOR_TEST_INTAN8_ICM4_PACKET_BYTES ||
+        max_intan_count != SENSOR_TEST_MAX_INTAN_FRAMES_PER_PACKET ||
+        intan_count > max_intan_count || icm_count != 1u ||
+        icm_offset != intan_count * SENSOR_TEST_INTAN_FRAME_BYTES ||
+        valid_data_bytes != icm_offset + SENSOR_TEST_ICM_FRAME_BYTES ||
+        trailer_offset != SENSOR_TEST_PACKET_TRAILER_OFFSET ||
+        valid_data_bytes > trailer_offset || (flags & ~7u) != 0u ||
+        ((flags & 1u) != 0u) != (dropped_intan != 0u) ||
+        ((flags & 2u) != 0u) != (dropped_icm != 0u) ||
+        ((flags & 4u) != 0u) !=
+            (intan_count == SENSOR_TEST_MAX_INTAN_FRAMES_PER_PACKET)) {
+        fprintf(stderr,
+                "Invalid packet trailer: valid=%" PRIu32
+                " intan=%" PRIu32 "/%" PRIu32 " icm=%" PRIu32
+                " icm_offset=%" PRIu32 " trailer_offset=%" PRIu32 "\n",
+                valid_data_bytes, intan_count, max_intan_count, icm_count,
+                icm_offset, trailer_offset);
+        return -1;
+    }
+
+    for (i = 0; i < intan_count; ++i) {
+        uint32_t offset = read_be32_volatile(trailer + 56u + 4u * i);
+        if (offset != i * SENSOR_TEST_INTAN_FRAME_BYTES) {
+            fprintf(stderr, "Invalid Intan frame offset %u: %" PRIu32 "\n",
+                    i, offset);
+            return -1;
+        }
+    }
+    for (; i < SENSOR_TEST_PACKET_INTAN_OFFSET_COUNT; ++i) {
+        uint32_t offset = read_be32_volatile(trailer + 56u + 4u * i);
+        if (offset != 0u) {
+            fprintf(stderr, "Unused Intan frame offset %u is nonzero: %" PRIu32 "\n",
+                    i, offset);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static void print_intan_packet_channels(const volatile uint32_t *words)
+{
+    const volatile uint8_t *bytes = (const volatile uint8_t *)words;
+    const volatile uint8_t *trailer = bytes + SENSOR_TEST_PACKET_TRAILER_OFFSET;
+    uint32_t frame_count = read_be32_volatile(trailer + 24u);
+    unsigned frame_index;
+
+    for (frame_index = 0; frame_index < frame_count; ++frame_index) {
+        uint32_t frame_offset = read_be32_volatile(trailer + 56u + 4u * frame_index);
+        unsigned slot;
+
+        printf("Intan frame %u at byte %" PRIu32 ":\n", frame_index, frame_offset);
+        for (slot = 0; slot < SENSOR_TEST_NUM_INTAN; ++slot) {
+            const volatile uint8_t *measurement =
+                bytes + frame_offset + 16u +
+                slot * SENSOR_TEST_INTAN_MEASUREMENT_BYTES;
+            unsigned channel;
+
+            printf("  physical slot %u sensor_id=%u:", slot, measurement[0]);
+            for (channel = 0; channel < SENSOR_TEST_INTAN_CHANNELS; ++channel) {
+                unsigned byte_index =
+                    (SENSOR_TEST_INTAN_CHANNELS - 1u - channel) * 2u;
+                uint16_t sample = (uint16_t)(
+                    ((uint16_t)measurement[1u + byte_index] << 8) |
+                    measurement[2u + byte_index]);
+                printf(" ch%u=%u", channel, sample);
+            }
+            putchar('\n');
+        }
+    }
+}
+
 static int wait_for_uio_interrupt(int uio_fd, uint32_t *irq_count)
 {
     ssize_t bytes;
@@ -978,6 +1134,9 @@ static void print_dma_words(unsigned transfer_index, uint32_t irq_count,
         printf("Trailer preview prefill matches: %zu/%zu\n",
                prefill_matches, trailer_preview);
     }
+
+    if (word_count * sizeof(*words) == SENSOR_TEST_INTAN8_ICM4_PACKET_BYTES)
+        print_intan_packet_channels(words);
 
     for (i = 0; i + 1 < word_count; ++i) {
         if (words[i] == UINT32_MAX && words[i + 1] == UINT32_MAX) {
@@ -1327,11 +1486,8 @@ int sensor_test_run_dma_interrupts(sensor_test_t *test,
         return -1;
     }
 
-    reg_write(core, CORE_CONTROL, CONTROL_RESET);
-    usleep(1000);
-    reg_write(core, CORE_CONTROL, 0);
-    reg_write(core, CORE_COMMAND, COMMAND_CLEAR);
-    reg_write(core, CORE_PERIOD, sample_period_ticks);
+    if (reset_configure_core_and_wait_intan(core, sample_period_ticks) != 0)
+        goto failure;
 
     if (reset_s2mm_dma(dma) != 0)
         goto failure;
@@ -1464,11 +1620,8 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         return -1;
     }
 
-    reg_write(core, CORE_CONTROL, CONTROL_RESET);
-    usleep(1000);
-    reg_write(core, CORE_CONTROL, 0);
-    reg_write(core, CORE_COMMAND, COMMAND_CLEAR);
-    reg_write(core, CORE_PERIOD, sample_period_ticks);
+    if (reset_configure_core_and_wait_intan(core, sample_period_ticks) != 0)
+        goto failure;
 
     if (reset_s2mm_dma(dma) != 0)
         goto failure;
@@ -1478,6 +1631,15 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
            " ticks, frame=%zu bytes, UIO=%s\n",
            sample_period_ticks, transfer_bytes, uio_device);
 
+    reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
+    if (enable_uio_interrupt(uio_fd) != 0)
+        goto failure;
+    prefill_dma_words(buffer->words, frame_words);
+    reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
+    reg_write(dma, S2MM_DA_MSB, 0);
+    reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
+    reg_write(core, CORE_CONTROL, CONTROL_ENABLE);
+
     while (transfer_count == 0 || completed < transfer_count) {
         uint32_t irq_count = 0;
         uint32_t dma_status;
@@ -1485,32 +1647,13 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         uint32_t dma_dst_addr;
         uint32_t dma_length;
 
-        reg_write(core, CORE_CONTROL, CONTROL_RESET);
-        usleep(1000);
-        reg_write(core, CORE_CONTROL, 0);
-        reg_write(core, CORE_COMMAND, COMMAND_CLEAR);
-        reg_write(core, CORE_PERIOD, sample_period_ticks);
-        reg_write(dma, S2MM_DMASR, DMA_IRQ_MASK);
-        if (enable_uio_interrupt(uio_fd) != 0)
-            goto failure;
-
-        prefill_dma_words(buffer->words, frame_words);
-
-        reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
-        reg_write(dma, S2MM_DA_MSB, 0);
-        reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
-        reg_write(core, CORE_CONTROL, CONTROL_ENABLE);
-
         if (wait_for_uio_interrupt(uio_fd, &irq_count) != 0)
             goto failure;
-        reg_write(core, CORE_CONTROL, 0);
 
         dma_control = reg_read(dma, S2MM_DMACR);
         dma_status = reg_read(dma, S2MM_DMASR);
         dma_dst_addr = reg_read(dma, S2MM_DA);
         dma_length = reg_read(dma, S2MM_LENGTH);
-        reg_write(dma, S2MM_DMASR, dma_status & DMA_IRQ_MASK);
-
         if (dma_status & DMA_ERROR_MASK) {
             fprintf(stderr, "DMA error after interrupt, S2MM_DMASR=0x%08"
                             PRIx32 "\n", dma_status);
@@ -1525,6 +1668,9 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
 
         __sync_synchronize();
         dma_buffer_sync_for_cpu(buffer);
+
+        if (validate_intan_icm_packet(buffer->words, transfer_bytes) != 0)
+            goto failure;
 
         ++completed;
         if (stream_fd >= 0 &&
@@ -1543,9 +1689,25 @@ int sensor_test_run_dma_interrupts_sized(sensor_test_t *test,
         }
 
         if (reg_read(core, CORE_STATUS) & STATUS_ERROR) {
-            fprintf(stderr, "Core error code: 0x%08" PRIx32 "\n",
-                    reg_read(core, CORE_ERROR));
+            fprintf(stderr,
+                    "Core error: status=0x%08" PRIx32
+                    " code=0x%08" PRIx32 " missed_intan=%" PRIu32
+                    " missed_icm=%" PRIu32 "\n",
+                    reg_read(core, CORE_STATUS), reg_read(core, CORE_ERROR),
+                    reg_read(core, SENSOR_TEST_CORE_MISSED_INTAN),
+                    reg_read(core, SENSOR_TEST_CORE_MISSED_ICM));
             goto failure;
+        }
+
+        reg_write(dma, S2MM_DMASR, dma_status & DMA_IRQ_MASK);
+
+        if (transfer_count == 0 || completed < transfer_count) {
+            prefill_dma_words(buffer->words, frame_words);
+            if (enable_uio_interrupt(uio_fd) != 0)
+                goto failure;
+            reg_write(dma, S2MM_DA, (uint32_t)buffer->physical_address);
+            reg_write(dma, S2MM_DA_MSB, 0);
+            reg_write(dma, S2MM_LENGTH, (uint32_t)transfer_bytes);
         }
     }
 

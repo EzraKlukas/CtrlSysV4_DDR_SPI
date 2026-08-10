@@ -23,27 +23,29 @@ module integrate_intan_packet_path_layout_tb;
     logic start_init = 1'b0;
     logic start_read = 1'b0;
     logic [63:0] timestamp = '0;
-    logic read_mode;
+    logic reader_initialized;
 
     always @(posedge clk) begin
         if (rst) timestamp <= '0;
         else timestamp <= timestamp + 1'b1;
     end
 
-    logic [6:0] init_list_len = 7'(MAX_COMMANDS);
+    logic [6:0] init_list_len;
     logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] init_cmd_list;
     logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_init_list_expect_a;
     logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_init_list_expect_b;
 
-    logic [6:0] acq_list_len = 7'(NUM_CHAN_PER_ADC);
+    logic [6:0] acq_list_len;
     logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] acq_cmd_list;
 
     config_pkg::Intan_frame_t reader_intan_frame;
     config_pkg::Intan_frame_t reader_snapshots[0:1];
     config_pkg::ICM_frame_t icm_frame;
 
-    logic reader_done_pulse;
+    logic reader_init_done_pulse;
+    logic reader_frame_done_pulse;
     logic reader_error;
+    logic reader_busy;
     logic intan_sclk;
     logic intan_mosi;
     logic intan_cs_n;
@@ -54,6 +56,7 @@ module integrate_intan_packet_path_layout_tb;
 
     // logic read_in_flight = 1'b0;
     logic reader_intan_frame_done;
+    logic allow_reader_error = 1'b0;
     int init_done_count = 0;
     int read_completion_count = 0;
     int forwarded_frame_count = 0;
@@ -85,10 +88,28 @@ module integrate_intan_packet_path_layout_tb;
     int beat_count = 0;
     int packet_done_count = 0;
     int axis_last_count = 0;
+    int axis_stall_counter = 0;
+    logic stalled_valid = 1'b0;
+    logic [AXIS_DATA_WIDTH-1:0] stalled_data;
+    logic [AXIS_DATA_WIDTH/8-1:0] stalled_keep;
+    logic stalled_last;
 
     assign packet_ready = fifo_packet_space;
     assign writer_word_ready = !fifo_full;
-    assign reader_intan_frame_done = reader_done_pulse && read_mode;
+    assign reader_intan_frame_done = reader_frame_done_pulse;
+
+    intan_program #(
+        .MAX_COMMANDS(MAX_COMMANDS),
+        .NUM_INTAN(NUM_INTAN),
+        .BITS_PER_WORD(BITS_PER_WORD)
+    ) u_program (
+        .init_list_len(init_list_len),
+        .init_cmd_list(init_cmd_list),
+        .expect_rx_ans_list_a(rx_init_list_expect_a),
+        .expect_rx_ans_list_b(rx_init_list_expect_b),
+        .acq_list_len(acq_list_len),
+        .acq_cmd_list(acq_cmd_list)
+    );
 
     intan_reader #(
         .MAX_COMMANDS(MAX_COMMANDS),
@@ -105,7 +126,7 @@ module integrate_intan_packet_path_layout_tb;
         .start_init(start_init),
         .start_read(start_read),
         .timestamp(timestamp),
-        .read_mode(read_mode),
+        .initialized(reader_initialized),
         .init_list_len(init_list_len),
         .init_cmd_list(init_cmd_list),
         .expect_rx_ans_list_a(rx_init_list_expect_a),
@@ -113,7 +134,9 @@ module integrate_intan_packet_path_layout_tb;
         .acq_list_len(acq_list_len),
         .acq_cmd_list(acq_cmd_list),
         .intan_frame(reader_intan_frame),
-        .done_pulse(reader_done_pulse),
+        .init_done_pulse(reader_init_done_pulse),
+        .frame_done_pulse(reader_frame_done_pulse),
+        .busy(reader_busy),
         .error(reader_error),
         .intan_sclk(intan_sclk),
         .intan_mosi(intan_mosi),
@@ -195,17 +218,6 @@ module integrate_intan_packet_path_layout_tb;
 
     task automatic fail(input string message);
         $fatal(1, "%0t: %s", $realtime, message);
-    endtask
-
-    task automatic set_init_vector(input int command_idx, input logic [15:0] command,
-                                   input logic [15:0] response);
-        begin
-            init_cmd_list[command_idx] = command;
-            for (int sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                rx_init_list_expect_a[command_idx][sensor_idx] = response;
-                rx_init_list_expect_b[command_idx][sensor_idx] = response;
-            end
-        end
     endtask
 
     task automatic reset_dut();
@@ -500,6 +512,14 @@ module integrate_intan_packet_path_layout_tb;
             if (be32(PACKET_TRAILER_OFFSET_BYTES + 24) != 2)
                 fail($sformatf("bad intan_frame_count: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 24)
                      ));
+            if (be32(PACKET_TRAILER_OFFSET_BYTES + 28) != MAX_INTAN_FRAMES_PER_PACKET)
+                fail($sformatf(
+                     "bad max_intan_frame_count: %0d expected %0d",
+                     be32(PACKET_TRAILER_OFFSET_BYTES + 28),
+                     MAX_INTAN_FRAMES_PER_PACKET
+                     ));
+            if (be32(PACKET_TRAILER_OFFSET_BYTES + 32) != 1)
+                fail($sformatf("bad icm_frame_count: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 32)));
             if (be32(PACKET_TRAILER_OFFSET_BYTES + 36) != expected_icm_offset)
                 fail($sformatf(
                      "bad icm_frame_start_index: %0d expected %0d",
@@ -542,49 +562,7 @@ module integrate_intan_packet_path_layout_tb;
     endtask
 
     initial begin
-        init_cmd_list = '0;
-        rx_init_list_expect_a = '0;
-        rx_init_list_expect_b = '0;
-        acq_cmd_list = '0;
         icm_frame = '0;
-
-        set_init_vector(0, 16'hFF00, 16'h0004);
-        set_init_vector(1, 16'hFF00, 16'h0004);
-        set_init_vector(2, 16'hFF00, 16'h0004);
-        set_init_vector(3, 16'hFF00, 16'h0004);
-        set_init_vector(4, 16'hFF00, 16'h0004);
-        set_init_vector(5, 16'hFF00, 16'h0004);
-        set_init_vector(6, 16'hFF00, 16'h0004);
-        set_init_vector(7, 16'hFF00, 16'h0004);
-        set_init_vector(8, 16'hFF00, 16'h0004);
-        set_init_vector(9, 16'h5500, 16'h0000);
-        set_init_vector(10, 16'h95FF, 16'hFFFF);
-        set_init_vector(11, 16'h94FF, 16'hFFFF);
-        set_init_vector(12, 16'h93FF, 16'hFFFF);
-        set_init_vector(13, 16'h92FF, 16'hFFFF);
-        set_init_vector(14, 16'h91FF, 16'hFFFF);
-        set_init_vector(15, 16'h90FF, 16'hFFFF);
-        set_init_vector(16, 16'h8FFF, 16'hFFFF);
-        set_init_vector(17, 16'h8EFF, 16'hFFFF);
-        set_init_vector(18, 16'h8D86, 16'hFF86);
-        set_init_vector(19, 16'h8C2C, 16'hFF2C);
-        set_init_vector(20, 16'h8B80, 16'hFF80);
-        set_init_vector(21, 16'h8A17, 16'hFF17);
-        set_init_vector(22, 16'h8980, 16'hFF80);
-        set_init_vector(23, 16'h8816, 16'hFF16);
-        set_init_vector(24, 16'h8700, 16'hFF00);
-        set_init_vector(25, 16'h8680, 16'hFF80);
-        set_init_vector(26, 16'h8540, 16'hFF40);
-        set_init_vector(27, 16'h8480, 16'hFF80);
-        set_init_vector(28, 16'h8300, 16'hFF00);
-        set_init_vector(29, 16'h8204, 16'hFF04);
-        set_init_vector(30, 16'h8142, 16'hFF42);
-        set_init_vector(31, 16'h80DE, 16'hFFDE);
-        set_init_vector(32, 16'hFF00, 16'h0004);
-        set_init_vector(33, 16'hFF00, 16'h0004);
-
-        for (int channel_idx = 0; channel_idx < NUM_CHAN_PER_ADC; channel_idx = channel_idx + 1)
-        acq_cmd_list[channel_idx] = {2'b0, 6'(channel_idx), 8'b0};
     end
 
     always_ff @(posedge clk) begin
@@ -594,23 +572,23 @@ module integrate_intan_packet_path_layout_tb;
             read_completion_count <= 0;
             forwarded_frame_count <= 0;
         end else begin
-            if (reader_error !== 1'b0) fail("intan_reader error asserted");
+            if (reader_error !== 1'b0 && !allow_reader_error)
+                fail("intan_reader error asserted unexpectedly");
 
             // if (start_read) read_in_flight <= 1'b1;
 
-            if (reader_intan_frame_done) forwarded_frame_count <= forwarded_frame_count + 1;
+            if (reader_init_done_pulse) begin
+                if (!reader_initialized) fail("init_done_pulse asserted while initialized was low");
+                init_done_count <= init_done_count + 1;
+            end
 
-            if (reader_done_pulse) begin
-                if (read_mode) begin
-                    if (read_completion_count >= 2)
-                        fail("more than two Intan read completions observed");
+            if (reader_frame_done_pulse) begin
+                if (!reader_initialized) fail("frame_done_pulse asserted before initialization");
+                forwarded_frame_count <= forwarded_frame_count + 1;
+                if (read_completion_count >= 2) fail("more than two Intan read completions observed");
 
-                    reader_snapshots[read_completion_count] <= reader_intan_frame;
-                    read_completion_count <= read_completion_count + 1;
-                    // read_in_flight <= 1'b0;
-                end else begin
-                    init_done_count <= init_done_count + 1;
-                end
+                reader_snapshots[read_completion_count] <= reader_intan_frame;
+                read_completion_count <= read_completion_count + 1;
             end
         end
     end
@@ -621,7 +599,25 @@ module integrate_intan_packet_path_layout_tb;
             beat_count <= 0;
             packet_done_count <= 0;
             axis_last_count <= 0;
+            axis_stall_counter <= 0;
+            axis_ready <= 1'b1;
+            stalled_valid <= 1'b0;
         end else begin
+            axis_stall_counter <= axis_stall_counter + 1;
+            axis_ready <= axis_stall_counter[2:0] != 3'b011;
+
+            if (stalled_valid) begin
+                if (!axis_valid || axis_data !== stalled_data || axis_keep !== stalled_keep ||
+                    axis_last !== stalled_last)
+                    fail("AXI output changed while backpressured");
+                if (axis_ready) stalled_valid <= 1'b0;
+            end else if (axis_valid && !axis_ready) begin
+                stalled_valid <= 1'b1;
+                stalled_data <= axis_data;
+                stalled_keep <= axis_keep;
+                stalled_last <= axis_last;
+            end
+
             if (writer_packet_done) packet_done_count <= packet_done_count + 1;
 
             if (fifo_underflow) fail("packet FIFO underflowed");
@@ -663,8 +659,24 @@ module integrate_intan_packet_path_layout_tb;
 
         if (reader_error !== 1'b0) fail("error was not clear after reset");
 
+        intan_fault_bit[0] = 1'b1;
+        allow_reader_error = 1'b1;
+        pulse_start_init();
+        begin : wait_for_expected_init_failure
+            int waited = 0;
+            while (!reader_error && waited < 20000) begin
+                @(posedge clk);
+                waited = waited + 1;
+            end
+            if (!reader_error) fail("invalid initialization response did not assert error");
+        end
+        if (reader_initialized || init_done_count != 0 || forwarded_frame_count != 0)
+            fail("failed initialization exposed initialized/done/frame state");
+
+        intan_fault_bit[0] = 1'b0;
         pulse_start_init();
         wait_for_init_count(1, 20000);
+        allow_reader_error = 1'b0;
         if (reader_error !== 1'b0) fail("initialization completed with error");
         if (forwarded_frame_count != 0)
             fail($sformatf("initialization forwarded %0d Intan frames", forwarded_frame_count));

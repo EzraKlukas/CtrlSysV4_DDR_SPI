@@ -21,8 +21,10 @@ MAX_FRAME_WORDS = 1_000_000
 SAMPLE_CLOCK_HZ = 125_000_000
 NUM_INTAN = 8
 NUM_ICM = 4
-INTAN_SAMPLING_RATIO = 30
-INTAN_DATA_BYTES = 64
+INTAN_SAMPLING_RATIO = 2
+INTAN_BITS_PER_WORD = 16
+INTAN_CHANNELS = 64
+INTAN_DATA_BYTES = INTAN_BITS_PER_WORD * INTAN_CHANNELS // 8
 ICM_DATA_BYTES = 20
 PACKET_TRAILER_BYTES = 256
 PACKET_TRAILER_INTAN_OFFSET_COUNT = 48
@@ -34,6 +36,13 @@ ICM_FRAME_BYTES = 16 + NUM_ICM * ICM_MEASUREMENT_BYTES
 PACKET_PAYLOAD_BYTES = PACKET_BYTES
 PACKET_MAGIC = b"\xff" * 8
 PACKET_TRAILER_OFFSET = PACKET_BYTES - PACKET_TRAILER_BYTES
+MAX_INTAN_FRAMES_BY_DATA = (
+    PACKET_TRAILER_OFFSET - ICM_FRAME_BYTES
+) // INTAN_FRAME_BYTES
+MAX_INTAN_FRAMES_PER_PACKET = min(
+    MAX_INTAN_FRAMES_BY_DATA,
+    PACKET_TRAILER_INTAN_OFFSET_COUNT,
+)
 PACKET_NUM_OFFSET = 8
 PACKET_TRAILER_BYTES_OFFSET = 12
 PACKET_BYTES_OFFSET = 16
@@ -154,6 +163,79 @@ def decode_packet_trailer(data: bytes) -> PacketTrailer:
         ),
         intan_offsets=intan_offsets,
     )
+
+
+def validate_packet_trailer(data: bytes, trailer: PacketTrailer) -> list[str]:
+    errors: list[str] = []
+    expected_icm_offset = trailer.intan_frame_count * INTAN_FRAME_BYTES
+    expected_valid_bytes = expected_icm_offset + ICM_FRAME_BYTES
+
+    if len(data) != PACKET_BYTES:
+        errors.append(f"packet length {len(data)} != {PACKET_BYTES}")
+    if trailer.magic != PACKET_MAGIC:
+        errors.append(f"magic {trailer.magic.hex()} != {PACKET_MAGIC.hex()}")
+    if trailer.trailer_bytes != PACKET_TRAILER_BYTES:
+        errors.append(
+            f"trailer_bytes {trailer.trailer_bytes} != {PACKET_TRAILER_BYTES}"
+        )
+    if trailer.packet_bytes != PACKET_BYTES:
+        errors.append(f"packet_bytes {trailer.packet_bytes} != {PACKET_BYTES}")
+    if trailer.trailer_offset != PACKET_TRAILER_OFFSET:
+        errors.append(
+            f"trailer_offset {trailer.trailer_offset} != {PACKET_TRAILER_OFFSET}"
+        )
+    if trailer.max_intan_frame_count != MAX_INTAN_FRAMES_PER_PACKET:
+        errors.append(
+            "max_intan_frame_count "
+            f"{trailer.max_intan_frame_count} != {MAX_INTAN_FRAMES_PER_PACKET}"
+        )
+    if trailer.intan_frame_count > MAX_INTAN_FRAMES_PER_PACKET:
+        errors.append(
+            f"intan_frame_count {trailer.intan_frame_count} exceeds capacity "
+            f"{MAX_INTAN_FRAMES_PER_PACKET}"
+        )
+    if trailer.icm_frame_count != 1:
+        errors.append(f"icm_frame_count {trailer.icm_frame_count} != 1")
+    if trailer.icm_offset != expected_icm_offset:
+        errors.append(
+            f"icm_offset {trailer.icm_offset} != {expected_icm_offset}"
+        )
+    if trailer.valid_data_bytes != expected_valid_bytes:
+        errors.append(
+            f"valid_data_bytes {trailer.valid_data_bytes} != {expected_valid_bytes}"
+        )
+    if expected_valid_bytes > PACKET_TRAILER_OFFSET:
+        errors.append("valid data overlaps the packet trailer")
+    if trailer.flags & ~0x7:
+        errors.append(f"unknown trailer flags 0x{trailer.flags:08x}")
+    if bool(trailer.flags & 0x1) != (trailer.dropped_intan_frames != 0):
+        errors.append("Intan drop flag/count mismatch")
+    if bool(trailer.flags & 0x2) != (trailer.dropped_icm_frames != 0):
+        errors.append("ICM drop flag/count mismatch")
+    if bool(trailer.flags & 0x4) != (
+        trailer.intan_frame_count == MAX_INTAN_FRAMES_PER_PACKET
+    ):
+        errors.append("capacity flag/frame-count mismatch")
+
+    for frame_index in range(trailer.intan_frame_count):
+        expected_offset = frame_index * INTAN_FRAME_BYTES
+        if trailer.intan_offsets[frame_index] != expected_offset:
+            errors.append(
+                f"intan_offsets[{frame_index}] "
+                f"{trailer.intan_offsets[frame_index]} != {expected_offset}"
+            )
+
+    for frame_index in range(
+        trailer.intan_frame_count,
+        PACKET_TRAILER_INTAN_OFFSET_COUNT,
+    ):
+        if trailer.intan_offsets[frame_index] != 0:
+            errors.append(
+                f"unused intan_offsets[{frame_index}] is nonzero: "
+                f"{trailer.intan_offsets[frame_index]}"
+            )
+
+    return errors
 
 
 def recv_exact(sock: socket.socket, length: int) -> bytes:
@@ -311,8 +393,8 @@ def packet_timestamps_from_bytes(data: bytes) -> tuple[int, int]:
 
 
 def print_intan_frame(data: bytes, frame_index: int, max_sensors: int,
-                      max_data_bytes: int, intan_offset: int) -> None:
-    offset = intan_offset + frame_index * INTAN_FRAME_BYTES
+                      max_data_bytes: int, frame_offset: int) -> None:
+    offset = frame_offset
     init_ts = read_u64_be(data, offset)
     done_ts = read_u64_be(data, offset + 8)
 
@@ -324,9 +406,15 @@ def print_intan_frame(data: bytes, frame_index: int, max_sensors: int,
         sensor_data = data[
             sensor_offset + 1:sensor_offset + 1 + INTAN_DATA_BYTES
         ]
+        sample_preview = []
+        for channel in range(min(INTAN_CHANNELS, max_data_bytes // 2)):
+            byte_index = (INTAN_CHANNELS - 1 - channel) * 2
+            sample = int.from_bytes(sensor_data[byte_index:byte_index + 2], "big")
+            sample_preview.append(f"ch{channel}={sample}")
         print(
-            f"    Intan measurement {sensor_index}: "
-            f"sensor_id={sensor_id} data={hex_preview(sensor_data, max_data_bytes)}"
+            f"    Intan physical slot {sensor_index}: "
+            f"sensor_id={sensor_id} samples=[{', '.join(sample_preview)}] "
+            f"raw={hex_preview(sensor_data, max_data_bytes)}"
         )
 
 
@@ -391,7 +479,7 @@ def find_plausible_trailer_offsets(data: bytes) -> list[int]:
         )
         if (
             data[offset:offset + 8] == PACKET_MAGIC
-            and intan_frame_count <= INTAN_SAMPLING_RATIO
+            and intan_frame_count <= MAX_INTAN_FRAMES_PER_PACKET
         ):
             offsets.append(offset)
 
@@ -645,7 +733,7 @@ def main() -> int:
                         help="Intan frames to decode per printed packet")
     parser.add_argument("--print-sensors", type=int, default=8,
                         help="sensor measurements to decode per printed frame")
-    parser.add_argument("--print-data-bytes", type=int, default=64,
+    parser.add_argument("--print-data-bytes", type=int, default=INTAN_DATA_BYTES,
                         help="data bytes to print per decoded measurement")
     parser.add_argument("--raw-bytes-per-line", type=int, default=32,
                         help="bytes per line when using --print-raw-bytes")
@@ -722,6 +810,16 @@ def main() -> int:
                         frame,
                         selected_dma_byte_order or "little",
                     )
+
+                if len(frame_bytes) == PACKET_BYTES:
+                    trailer_errors = validate_packet_trailer(
+                        frame_bytes,
+                        decode_packet_trailer(frame_bytes),
+                    )
+                    if trailer_errors:
+                        raise ValueError(
+                            "invalid CtrlSys packet trailer: " + "; ".join(trailer_errors)
+                        )
 
                 if frame_words == FRAME_WORDS:
                     if frame is None:
@@ -802,7 +900,7 @@ def main() -> int:
                         f" fpga_start={start_ticks} fpga_done={done_ticks} "
                         f"read_us={read_us:.3f}"
                     )
-                if args.raw_hex:
+                if args.raw_hex and frame is not None and frame_words == FRAME_WORDS:
                     line += " sensor_hex=" + sensor_bytes_from_frame(frame).hex(" ")
                 if not args.quiet:
                     print(line, flush=True)

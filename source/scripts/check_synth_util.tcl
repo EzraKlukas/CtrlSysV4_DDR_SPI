@@ -9,7 +9,11 @@ read_verilog -sv [list \
     [file join $hdl_dir axil_regs.v] \
     [file join $hdl_dir stopwatch_64.sv] \
     [file join $hdl_dir ICM_reader.sv] \
-    [file join $hdl_dir Intan_reader.sv] \
+    [file join $hdl_dir intan_program.sv] \
+    [file join $hdl_dir intan_spi_word_engine.sv] \
+    [file join $hdl_dir intan_cmd_sequencer.sv] \
+    [file join $hdl_dir intan_acq_engine.sv] \
+    [file join $hdl_dir intan_reader.sv] \
     [file join $hdl_dir packet_writer.sv] \
     [file join $hdl_dir SPI_mux.sv] \
     [file join $hdl_dir packet_buffer.sv] \

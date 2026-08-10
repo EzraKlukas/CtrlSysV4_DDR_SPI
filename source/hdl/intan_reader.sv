@@ -33,7 +33,7 @@ module intan_reader #(
     input logic start_init,
     input logic start_read,
     input logic [63:0] timestamp,
-    output logic read_mode,
+    output logic initialized,
 
     // Initialization sequence and expected pipelined responses.
     input logic [6:0] init_list_len,
@@ -47,7 +47,8 @@ module intan_reader #(
 
     // Completed frame and status.
     output config_pkg::Intan_frame_t intan_frame,
-    output logic done_pulse,
+    output logic init_done_pulse,
+    output logic frame_done_pulse,
     output logic busy,
     output logic error,
 
@@ -85,7 +86,7 @@ module intan_reader #(
         .start_init(start_init),
         .start_read(start_read),
         .timestamp(timestamp),
-        .read_mode(read_mode),
+        .initialized(initialized),
         .Intan_frame(intan_frame),
 
         .init_list_len(init_list_len),
@@ -104,7 +105,8 @@ module intan_reader #(
         .rx_ans_list_b (response_list_b),
         .done_seq_pulse(sequence_done_pulse),
 
-        .done(done_pulse),
+        .init_done_pulse(init_done_pulse),
+        .frame_done_pulse(frame_done_pulse),
         .busy(busy),
         .err (error)
     );

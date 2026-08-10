@@ -36,40 +36,36 @@ module intan_cmd_sequencer #(
             tx_word <= '0;
             run_cyclic <= 1'b0;
             done_seq_pulse <= 1'b0;
-        end else if (start_seq_pulse) begin
-            done_seq_pulse   <= 1'b0;
-            running_sequence <= 1'b1;
-            // all things associated with resetting in some sense?
-        end
-        if (running_sequence || start_seq_pulse) begin
-            // each time the word engine is done, initiate.
-            // This is faulty, means we have to wait a full cycle to start.
-            if (done_pulse) begin  // only runs once?
-                cmd_cnt <= cmd_cnt + 1;
+            running_sequence <= 1'b0;
+        end else begin
+            done_seq_pulse <= 1'b0;
 
-                if (cmd_cnt < cmd_list_len + 2) begin
-                    if (cmd_cnt >= 2) begin
-                        // read from rx, check endianness
-                        for (
-                            sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1
-                        ) begin
-                            rx_ans_list_a[cmd_cnt-2][sensor_idx] <= rx_ans_a[sensor_idx];
-                            rx_ans_list_b[cmd_cnt-2][sensor_idx] <= rx_ans_b[sensor_idx];
-                        end
-                    end
-                    tx_word <= tx_cmd_list[cmd_cnt+1];
-
-                    if (cmd_cnt - 2 == cmd_list_len - 1) begin
-                        run_cyclic <= 1'b0;
-                        done_seq_pulse <= 1'b1;
-                        cmd_cnt <= '0;
-                        tx_word <= '0;
-                        running_sequence <= 1'b0;
+            if (start_seq_pulse && !running_sequence) begin
+                rx_ans_list_a <= '0;
+                rx_ans_list_b <= '0;
+                cmd_cnt <= '0;
+                tx_word <= tx_cmd_list[0];
+                run_cyclic <= 1'b1;
+                running_sequence <= 1'b1;
+            end else if (running_sequence && done_pulse) begin
+                if (cmd_cnt >= 2 && cmd_cnt < cmd_list_len + 2) begin
+                    for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
+                        rx_ans_list_a[cmd_cnt-2][sensor_idx] <= rx_ans_a[sensor_idx];
+                        rx_ans_list_b[cmd_cnt-2][sensor_idx] <= rx_ans_b[sensor_idx];
                     end
                 end
-            end else if (cmd_cnt == '0) begin
-                tx_word <= tx_cmd_list[0];
-                run_cyclic <= 1'b1;  // ignites SPI word engine.
+
+                if (cmd_cnt == cmd_list_len + 1) begin
+                    cmd_cnt <= '0;
+                    tx_word <= '0;
+                    run_cyclic <= 1'b0;
+                    running_sequence <= 1'b0;
+                    done_seq_pulse <= 1'b1;
+                end else begin
+                    cmd_cnt <= cmd_cnt + 1'b1;
+                    if (cmd_cnt + 1 < cmd_list_len) tx_word <= tx_cmd_list[cmd_cnt+1];
+                    else tx_word <= '0;
+                end
             end
         end
     end

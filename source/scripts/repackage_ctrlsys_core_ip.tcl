@@ -112,7 +112,8 @@ proc ctrlsys_specialize_packaged_constants {temp_src file_names} {
         NUM_ICM
         NUM_INTAN
         ICM_DATA_BYTES
-        INTAN_DATA_BYTES
+        INTAN_BITS_PER_WORD
+        INTAN_CHANNELS
         INTAN_SAMPLING_RATIO
         BUFFER_SIZE
         AXIS_DATA_WIDTH
@@ -125,7 +126,7 @@ proc ctrlsys_specialize_packaged_constants {temp_src file_names} {
     set packet_trailer_bits 2048
     set packet_trailer_intan_offset_count 48
     set icm_measurement_bits [expr {8 + 8 * $values(ICM_DATA_BYTES)}]
-    set intan_measurement_bits [expr {8 + 8 * $values(INTAN_DATA_BYTES)}]
+    set intan_measurement_bits [expr {8 + $values(INTAN_BITS_PER_WORD) * $values(INTAN_CHANNELS)}]
     set icm_frame_bits [expr {128 + $values(NUM_ICM) * $icm_measurement_bits}]
     set intan_frame_bits [expr {128 + $values(NUM_INTAN) * $intan_measurement_bits}]
     set packet_trailer_bytes [expr {$packet_trailer_bits / 8}]
@@ -326,11 +327,15 @@ proc ctrlsys_build_package {repo_root opts_list} {
         axil_regs_slave_lite_v1_0_S00_AXI.v
         axil_regs.v
         acquisition_controller.sv
+        ICM_reader.sv
+        intan_program.sv
+        intan_spi_word_engine.sv
+        intan_cmd_sequencer.sv
+        intan_acq_engine.sv
+        intan_reader.sv
+        packet_writer.sv
         packet_buffer.sv
         packet_to_axis.sv
-        ICM_reader.sv
-        Intan_reader.sv
-        packet_writer.sv
         SPI_mux.sv
         stopwatch_64.sv
         ctrlsys_core.sv
