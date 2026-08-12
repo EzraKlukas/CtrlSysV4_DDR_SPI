@@ -77,9 +77,9 @@ module intan_acq_engine #(
                 Intan_frame.Intan_data[sensor_idx].data <= '0;
             end
         end else begin
-            init_done_pulse <= 1'b0;
+            init_done_pulse  <= 1'b0;
             frame_done_pulse <= 1'b0;
-            start_seq_pulse <= 1'b0;
+            start_seq_pulse  <= 1'b0;
 
             case (intan_state)
                 ST_PRE_INIT: begin

@@ -26,6 +26,9 @@ module axil_regs_slave_lite_v1_0_S00_AXI #
     input  wire [31:0] sample_count,
     input  wire [31:0] error_code,
     input  wire [3:0]  state,
+    input  wire [31:0] ext_status,
+    input  wire [31:0] missed_intan_count,
+    input  wire [31:0] missed_icm_count,
 
     // FPGA-side packet/data inputs
     input  wire [31:0] data_word0,
@@ -65,8 +68,8 @@ localparam integer ADDR_LSB = (C_S_AXI_DATA_WIDTH/32) + 1; // 2 for 32-bit AXI d
 localparam integer OPT_MEM_ADDR_BITS = 3;                  // address bits [5:2] => 16 registers
 
 // CPU-writable registers
-reg [31:0] slv_reg0 = 32'h00000001; // 0x00 control
-reg [31:0] slv_reg1 = 32'd5000; // 0x04 sample_period
+reg [31:0] slv_reg0 = 32'h00000000; // 0x00 control
+reg [31:0] slv_reg1 = 32'd125000; // 0x04 sample_period
 
 // AXI write channel state
 reg [C_S_AXI_ADDR_WIDTH-1:0] axi_awaddr;
@@ -121,8 +124,8 @@ always @(posedge S_AXI_ACLK) begin
         axi_bvalid   <= 1'b0;
         axi_bresp    <= 2'b00;
 
-        slv_reg0 <= 32'h00000001;
-        slv_reg1 <= 32'd5000;
+        slv_reg0 <= 32'h00000000;
+        slv_reg1 <= 32'd125000;
 
         clear_error          <= 1'b0;
         reset_sample_counter <= 1'b0;
@@ -214,7 +217,7 @@ end
 
 wire [31:0] status_reg;
 assign status_reg = {
-    24'b0,
+    ext_status[31:8],
     state,
     packet_done,
     read_in_progress,
@@ -225,11 +228,11 @@ assign status_reg = {
 assign S_AXI_RDATA =
     (rd_addr_index == 4'h0) ? slv_reg0 :              // 0x00 control
     (rd_addr_index == 4'h1) ? slv_reg1 :              // 0x04 sample_period
-    (rd_addr_index == 4'h2) ? 32'h00000000 :          // 0x08 reserved
+    (rd_addr_index == 4'h2) ? missed_intan_count :    // 0x08 missed Intan reads
     (rd_addr_index == 4'h3) ? 32'h00000000 :          // 0x0C command, write-only
     (rd_addr_index == 4'h4) ? status_reg :            // 0x10 status
     (rd_addr_index == 4'h5) ? sample_count :          // 0x14 sample_count
-    (rd_addr_index == 4'h6) ? 32'h00000000 :          // 0x18 reserved
+    (rd_addr_index == 4'h6) ? missed_icm_count :      // 0x18 missed ICM reads
     (rd_addr_index == 4'h7) ? error_code :            // 0x1C error_code
     (rd_addr_index == 4'h8) ? data_word0 :            // 0x20 data_word0
     (rd_addr_index == 4'h9) ? data_word1 :            // 0x24 data_word1

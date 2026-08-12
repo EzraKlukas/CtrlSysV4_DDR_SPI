@@ -1,0 +1,24 @@
+#-----------------------------------------------------------
+# Vivado v2025.1 (64-bit)
+# SW Build 6140274 on Wed May 21 22:58:25 MDT 2025
+# IP Build 6138677 on Thu May 22 03:10:11 MDT 2025
+# SharedData Build 6139179 on Tue May 20 17:58:58 MDT 2025
+# Start of session at: Mon Aug 10 16:10:40 2026
+# Process ID         : 376014
+# Current directory  : /home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/scripts
+# Command line       : vivado -mode batch -source source/scripts/repackage_ctrlsys_core_ip.tcl
+# Log file           : /home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/scripts/vivado.log
+# Journal file       : /home/ezraklukas/Documents/arbeit/ubckin/notes/ezra/resources/fpga/CtrlSysV4_DDR_SPI/source/scripts/vivado.jou
+# Running On         : nicodemus
+# Platform           : Ubuntu
+# Operating System   : Ubuntu 24.04.4 LTS
+# Processor Detail   : Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz
+# CPU Frequency      : 3601.047 MHz
+# CPU Physical cores : 4
+# CPU Logical cores  : 8
+# Host memory        : 16632 MB
+# Swap memory        : 15367 MB
+# Total Virtual      : 32000 MB
+# Available Virtual  : 25596 MB
+#-----------------------------------------------------------
+source source/scripts/repackage_ctrlsys_core_ip.tcl

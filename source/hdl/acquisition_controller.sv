@@ -12,13 +12,13 @@ module acquisition_controller (
     input  logic        intan_initialized,
     input  logic        intan_busy,
     input  logic        icm_busy,
-    input  logic        enable,               // Trigger reads while enable is high
+    input  logic        enable,                 // Trigger reads while enable is high
     input  logic [63:0] timestamp,
     input  logic [63:0] sample_period_ICM,
     input  logic [63:0] sample_period_Intan,
     output logic        startInit_Intan,
-    output logic        startRead_ICM,        // ICM read start pulse
-    output logic        startRead_Intan,      // Intan RHD2164 read start pulse
+    output logic        startRead_ICM,          // ICM read start pulse
+    output logic        startRead_Intan,        // Intan RHD2164 read start pulse
     output logic [31:0] missedRead_ICM_count,
     output logic [31:0] missedRead_Intan_count
 );
@@ -45,7 +45,7 @@ module acquisition_controller (
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            prev_sample_time_ICM  <= 0;
+            prev_sample_time_ICM <= 0;
             prev_sample_time_Intan <= 0;
             startInit_Intan <= 0;
             startRead_ICM <= 0;
@@ -56,7 +56,7 @@ module acquisition_controller (
             init_request_pending <= 0;
         end else begin
             startInit_Intan <= 0;
-            startRead_ICM <= 0;
+            startRead_ICM   <= 0;
             startRead_Intan <= 0;
 
             if (intan_initialized) begin
@@ -71,7 +71,7 @@ module acquisition_controller (
             end
 
             if (acquisition_active && !prev_acquisition_active) begin
-                prev_sample_time_ICM <= timestamp;
+                prev_sample_time_ICM   <= timestamp;
                 prev_sample_time_Intan <= timestamp;
                 if (!icm_busy) startRead_ICM <= 1'b1;
                 else missedRead_ICM_count <= missedRead_ICM_count + 1'b1;
@@ -80,8 +80,7 @@ module acquisition_controller (
             end else if (acquisition_active) begin
                 if (icm_due) begin
                     if (!icm_busy) startRead_ICM <= 1'b1;
-                    if (icm_busy || icm_late)
-                        missedRead_ICM_count <= missedRead_ICM_count + 1'b1;
+                    if (icm_busy || icm_late) missedRead_ICM_count <= missedRead_ICM_count + 1'b1;
 
                     if (icm_late || icm_busy) prev_sample_time_ICM <= timestamp;
                     else prev_sample_time_ICM <= prev_sample_time_ICM + sample_period_ICM;
@@ -97,7 +96,7 @@ module acquisition_controller (
                 end
             end else begin
                 if (prev_acquisition_active) begin
-                    prev_sample_time_ICM <= timestamp;
+                    prev_sample_time_ICM   <= timestamp;
                     prev_sample_time_Intan <= timestamp;
                 end
             end

@@ -108,7 +108,7 @@ module intan_reader #(
         .init_done_pulse(init_done_pulse),
         .frame_done_pulse(frame_done_pulse),
         .busy(busy),
-        .err (error)
+        .err(error)
     );
 
     intan_cmd_sequencer #(

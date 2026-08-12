@@ -19,7 +19,7 @@ proc ctrlsys_usage {} {
     puts "  -vendor <vendor>  VLNV vendor. Default: user.org"
     puts "  -library <lib>    VLNV library. Default: user"
     puts "  -name <name>      VLNV name. Default: ctrlsys_core"
-    puts "  -version <ver>    VLNV version. Default: 1.0"
+    puts "  -version <ver>    VLNV version. Default: 1.1"
     puts "  -taxonomy <path>  IP catalog taxonomy. Default: /UserIP"
 }
 
@@ -36,7 +36,7 @@ proc ctrlsys_parse_args {repo_root} {
         vendor user.org \
         library user \
         name ctrlsys_core \
-        version 1.0 \
+        version 1.1 \
         taxonomy /UserIP \
         internal_run 0]
 
@@ -93,6 +93,34 @@ proc ctrlsys_copy_sources {hdl_dir destination file_names} {
     }
 }
 
+proc ctrlsys_publish_staged_package {staging_root ip_root} {
+    set ip_parent [file dirname $ip_root]
+    set ip_name [file tail $ip_root]
+    set backup_root [file normalize [file join $ip_parent .${ip_name}.backup.[pid]]]
+    set had_existing_package [file exists $ip_root]
+
+    ctrlsys_require_file [file join $staging_root component.xml] \
+        "Staged packaged component.xml"
+
+    file mkdir $ip_parent
+    file delete -force $backup_root
+
+    if {$had_existing_package} {
+        file rename $ip_root $backup_root
+    }
+
+    if {[catch {file rename $staging_root $ip_root} message options]} {
+        if {$had_existing_package && [file exists $backup_root] && ![file exists $ip_root]} {
+            file rename $backup_root $ip_root
+        }
+        return -options $options $message
+    }
+
+    if {$had_existing_package} {
+        file delete -force $backup_root
+    }
+}
+
 proc ctrlsys_read_int_localparam {config_path name} {
     set stream [open $config_path r]
     set text [read $stream]
@@ -103,83 +131,6 @@ proc ctrlsys_read_int_localparam {config_path name} {
         error "Could not read integer localparam $name from $config_path"
     }
     return $value
-}
-
-proc ctrlsys_specialize_packaged_constants {temp_src file_names} {
-    set config_path [file normalize [file join $temp_src config_pkg.sv]]
-    array set values {}
-    foreach name {
-        NUM_ICM
-        NUM_INTAN
-        ICM_DATA_BYTES
-        INTAN_BITS_PER_WORD
-        INTAN_CHANNELS
-        INTAN_SAMPLING_RATIO
-        BUFFER_SIZE
-        AXIS_DATA_WIDTH
-        PACKET_BYTES
-    } {
-        set values($name) [ctrlsys_read_int_localparam $config_path $name]
-    }
-
-    set axis_bytes [expr {$values(AXIS_DATA_WIDTH) / 8}]
-    set packet_trailer_bits 2048
-    set packet_trailer_intan_offset_count 48
-    set icm_measurement_bits [expr {8 + 8 * $values(ICM_DATA_BYTES)}]
-    set intan_measurement_bits [expr {8 + $values(INTAN_BITS_PER_WORD) * $values(INTAN_CHANNELS)}]
-    set icm_frame_bits [expr {128 + $values(NUM_ICM) * $icm_measurement_bits}]
-    set intan_frame_bits [expr {128 + $values(NUM_INTAN) * $intan_measurement_bits}]
-    set packet_trailer_bytes [expr {$packet_trailer_bits / 8}]
-    set packet_trailer_offset_bytes [expr {$values(PACKET_BYTES) - $packet_trailer_bytes}]
-    set icm_frame_bytes [expr {$icm_frame_bits / 8}]
-    set intan_frame_bytes [expr {$intan_frame_bits / 8}]
-    set max_intan_frames_by_data [expr {($packet_trailer_offset_bytes - $icm_frame_bytes) / $intan_frame_bytes}]
-    set max_intan_frames [expr {$max_intan_frames_by_data < $packet_trailer_intan_offset_count ? $max_intan_frames_by_data : $packet_trailer_intan_offset_count}]
-    set max_packet_data_bytes [expr {$max_intan_frames * $intan_frame_bytes + $icm_frame_bytes}]
-    set max_packet_valid_bytes [expr {$max_packet_data_bytes + $packet_trailer_bytes}]
-    set values(PACKET_TRAILER_BYTES) $packet_trailer_bytes
-    set values(PACKET_TRAILER_INTAN_OFFSET_COUNT) $packet_trailer_intan_offset_count
-    set values(PACKET_TRAILER_FIXED_BYTES) [expr {56 + 4 * $packet_trailer_intan_offset_count}]
-    set values(PACKET_TRAILER_RESERVED_BYTES) [expr {$packet_trailer_bytes - $values(PACKET_TRAILER_FIXED_BYTES)}]
-    set values(PACKET_TRAILER_OFFSET_BYTES) $packet_trailer_offset_bytes
-    set values(ICM_FRAME_BYTES) $icm_frame_bytes
-    set values(INTAN_FRAME_BYTES) $intan_frame_bytes
-    set values(MAX_INTAN_FRAMES_BY_DATA) $max_intan_frames_by_data
-    set values(MAX_INTAN_FRAMES_PER_PACKET) $max_intan_frames
-    set values(MAX_PACKET_DATA_BYTES) $max_packet_data_bytes
-    set values(MAX_PACKET_VALID_BYTES) $max_packet_valid_bytes
-    set values(PACKET_TRAILER_BITS) $packet_trailer_bits
-    set values(PACKET_TRAILER_BITS_EXPECTED) $packet_trailer_bits
-    set values(PACKET_PAYLOAD_BYTES) $max_packet_valid_bytes
-    set values(PACKET_AXIS_WORDS) [expr {$values(PACKET_BYTES) / $axis_bytes}]
-    set values(PACKET_LAST_BYTES) $axis_bytes
-    set values(PACKET_BUFFER_WORDS) [expr {$values(PACKET_AXIS_WORDS) * $values(BUFFER_SIZE)}]
-
-    set replacements {}
-
-    foreach name [array names values] {
-        lappend replacements "config_pkg::$name" $values($name)
-    }
-
-    foreach file_name $file_names {
-        set path [file normalize [file join $temp_src $file_name]]
-        set stream [open $path r]
-        set text [read $stream]
-        close $stream
-
-        set text [string map $replacements $text]
-        if {$file_name eq "ctrlsys_core.sv"} {
-            set bare_replacements {}
-            foreach name [array names values] {
-                lappend bare_replacements $name $values($name)
-            }
-            set text [string map $bare_replacements $text]
-        }
-
-        set stream [open $path w]
-        puts -nonewline $stream $text
-        close $stream
-    }
 }
 
 proc ctrlsys_set_port_map {bus logical_name physical_name} {
@@ -322,6 +273,9 @@ proc ctrlsys_build_package {repo_root opts_list} {
     set temp_root [file normalize [file join $repo_root build ip_packager_tmp]]
     set temp_src [file normalize [file join $temp_root src]]
     set project_dir [file normalize [file join $temp_root project]]
+    set ip_parent [file dirname $opts(ip_root)]
+    set ip_name [file tail $opts(ip_root)]
+    set staging_ip_root [file normalize [file join $ip_parent .${ip_name}.staging.[pid]]]
     set hdl_files {
         config_pkg.sv
         axil_regs_slave_lite_v1_0_S00_AXI.v
@@ -339,6 +293,7 @@ proc ctrlsys_build_package {repo_root opts_list} {
         SPI_mux.sv
         stopwatch_64.sv
         ctrlsys_core.sv
+        ctrlsys_core_ip_wrapper.v
     }
 
     puts "Repackaging ctrlsys_core"
@@ -347,53 +302,73 @@ proc ctrlsys_build_package {repo_root opts_list} {
     puts "  Part:    $opts(part)"
 
     file delete -force $temp_root
-    file delete -force $opts(ip_root)
-    ctrlsys_copy_sources $hdl_dir $temp_src $hdl_files
-    ctrlsys_specialize_packaged_constants $temp_src $hdl_files
-    create_project -force ctrlsys_core_ip_packager $project_dir -part $opts(part)
+    file delete -force $staging_ip_root
 
-    set project_files {}
-    foreach file_name $hdl_files {
-        lappend project_files [file normalize [file join $temp_src $file_name]]
+    set build_status [catch {
+        ctrlsys_copy_sources $hdl_dir $temp_src $hdl_files
+        create_project -force ctrlsys_core_ip_packager $project_dir -part $opts(part)
+
+        set project_files {}
+        foreach file_name $hdl_files {
+            lappend project_files [file normalize [file join $temp_src $file_name]]
+        }
+        add_files -norecurse -fileset sources_1 $project_files
+        set_property top ctrlsys_core_ip_wrapper [get_filesets sources_1]
+        update_compile_order -fileset sources_1
+
+        ipx::package_project \
+            -root_dir $staging_ip_root \
+            -vendor $opts(vendor) \
+            -library $opts(library) \
+            -taxonomy $opts(taxonomy) \
+            -import_files \
+            -force
+
+        set core [ipx::current_core]
+        set_property vendor $opts(vendor) $core
+        set_property library $opts(library) $core
+        set_property name $opts(name) $core
+        set_property version $opts(version) $core
+        set_property taxonomy [list $opts(taxonomy)] $core
+        set_property display_name {CtrlSysV4 Control System Core} $core
+        set_property description {Multi-sensor SPI acquisition core with AXI4-Lite control and AXI4-Stream output} $core
+
+        ctrlsys_add_axi_spi_interface $core
+        ctrlsys_configure_clocks $core
+        ctrlsys_configure_address_space $core
+        ctrlsys_verify_parameters $core
+
+        ipx::create_xgui_files $core
+        ctrlsys_write_xgui $staging_ip_root $opts(name)
+        ctrlsys_verify_axi_spi_interface $core
+
+        ipx::update_checksums $core
+        set integrity [ipx::check_integrity -quiet $core]
+        if {$integrity ne ""} {
+            puts $integrity
+        }
+        ipx::save_core $core
+
+        set staged_component_xml [file normalize [file join $staging_ip_root component.xml]]
+        ctrlsys_require_file $staged_component_xml "Staged packaged component.xml"
+    } build_message build_options]
+
+    catch {close_project}
+
+    if {$build_status} {
+        file delete -force $staging_ip_root
+        file delete -force $temp_root
+        return -options $build_options $build_message
     }
-    add_files -norecurse -fileset sources_1 $project_files
-    set_property top ctrlsys_core [get_filesets sources_1]
-    update_compile_order -fileset sources_1
 
-    ipx::package_project \
-        -root_dir $opts(ip_root) \
-        -vendor $opts(vendor) \
-        -library $opts(library) \
-        -taxonomy $opts(taxonomy) \
-        -import_files \
-        -force
-
-    set core [ipx::current_core]
-    set_property vendor $opts(vendor) $core
-    set_property library $opts(library) $core
-    set_property name $opts(name) $core
-    set_property version $opts(version) $core
-    set_property taxonomy [list $opts(taxonomy)] $core
-    set_property display_name {CtrlSysV4 Control System Core} $core
-    set_property description {Multi-sensor SPI acquisition core with AXI4-Lite control and AXI4-Stream output} $core
-
-    ctrlsys_add_axi_spi_interface $core
-    ctrlsys_configure_clocks $core
-    ctrlsys_configure_address_space $core
-    ctrlsys_verify_parameters $core
-
-    ipx::create_xgui_files $core
-    ctrlsys_write_xgui $opts(ip_root) $opts(name)
-    ctrlsys_verify_axi_spi_interface $core
-
-    ipx::update_checksums $core
-    set integrity [ipx::check_integrity -quiet $core]
-    if {$integrity ne ""} {
-        puts $integrity
+    if {[catch {
+        ctrlsys_publish_staged_package $staging_ip_root $opts(ip_root)
+    } publish_message publish_options]} {
+        file delete -force $staging_ip_root
+        file delete -force $temp_root
+        return -options $publish_options $publish_message
     }
-    ipx::save_core $core
 
-    close_project
     file delete -force $temp_root
 
     set component_xml [file normalize [file join $opts(ip_root) component.xml]]

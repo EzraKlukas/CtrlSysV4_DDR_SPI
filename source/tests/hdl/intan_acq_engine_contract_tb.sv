@@ -86,11 +86,11 @@ module intan_acq_engine_contract_tb;
 
     initial begin
         init_cmd_list[0] = 16'hFF00;
-        acq_cmd_list[0] = 16'h0000;
-        expect_a[0][0] = 16'h1111;
-        expect_a[0][1] = 16'h2222;
-        expect_b[0][0] = 16'h3333;
-        expect_b[0][1] = 16'h4444;
+        acq_cmd_list[0]  = 16'h0000;
+        expect_a[0][0]   = 16'h1111;
+        expect_a[0][1]   = 16'h2222;
+        expect_b[0][0]   = 16'h3333;
+        expect_b[0][1]   = 16'h4444;
 
         repeat (3) step();
         rst = 1'b0;

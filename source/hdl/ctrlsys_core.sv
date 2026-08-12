@@ -1,15 +1,13 @@
 `timescale 1ns / 1ps
 
-import config_pkg::*;
-
 module ctrlsys_core (
     input logic clk,
     input logic rst_n,
 
-    output logic               spi_sclk,
-    output logic               spi_mosi,
-    output logic               spi_cs_n,
-    input  logic [NUM_ICM-1:0] spi_miso,
+    output logic                           spi_sclk,
+    output logic                           spi_mosi,
+    output logic                           spi_cs_n,
+    input  logic [config_pkg::NUM_ICM-1:0] spi_miso,
 
     output logic intan_sclk,
     output logic intan_mosi,
@@ -59,7 +57,7 @@ module ctrlsys_core (
 );
 
     localparam logic [6:0] SPI_REG_ADDR = 7'd45;
-    localparam int MAX_COMMANDS = 34;
+    localparam int MAX_COMMANDS = 64;
     localparam logic [31:0] ERR_FIFO_OVERFLOW = 32'h0000_0001;
     localparam logic [31:0] ERR_FIFO_UNDERFLOW = 32'h0000_0002;
     localparam logic [31:0] ERR_INTAN_INIT = 32'h0000_0004;
@@ -76,8 +74,7 @@ module ctrlsys_core (
             $error("ctrlsys_core packet cannot hold the nominal Intan frames per ICM period");
         if (INTAN_FRAME_BYTES != 1048)
             $error("ctrlsys_core production Intan frame must be 1048 bytes");
-        if (ICM_FRAME_BYTES != 100)
-            $error("ctrlsys_core production ICM frame must be 100 bytes");
+        if (ICM_FRAME_BYTES != 100) $error("ctrlsys_core production ICM frame must be 100 bytes");
         if (PACKET_TRAILER_OFFSET_BYTES < ICM_FRAME_BYTES + INTAN_FRAME_BYTES)
             $error("ctrlsys_core packet data region cannot hold one Intan and one ICM frame");
     end
@@ -178,8 +175,7 @@ module ctrlsys_core (
     assign axi_spi_sck_i = axi_spi_sck_o;
     assign axi_spi_ss_i = axi_spi_ss_o;
     assign icm_sample_period = {32'b0, axil_sample_period};
-    assign intan_sample_period =
-        {32'b0, axil_sample_period} / 64'(INTAN_SAMPLING_RATIO);
+    assign intan_sample_period = {32'b0, axil_sample_period} / 64'(INTAN_SAMPLING_RATIO);
     assign packet_fifo_wr_en = packet_writer_word_valid && !packet_fifo_full;
     assign ext_status = {
         16'b0,
@@ -369,21 +365,21 @@ module ctrlsys_core (
 
     always_ff @(posedge clk) begin
         if (core_rst) begin
-            sample_count    <= 32'b0;
-            error_latched   <= 1'b0;
-            error_code      <= 32'b0;
-            missed_icm_count_d <= 32'b0;
+            sample_count         <= 32'b0;
+            error_latched        <= 1'b0;
+            error_code           <= 32'b0;
+            missed_icm_count_d   <= 32'b0;
             missed_intan_count_d <= 32'b0;
-            packet_done_irq <= 1'b0;
-            debug_icm_frame <= '0;
-            data_word0      <= 32'b0;
-            data_word1      <= 32'b0;
-            data_word2      <= 32'b0;
-            data_word3      <= 32'b0;
-            data_word4      <= 32'b0;
-            data_word5      <= 32'b0;
-            data_word6      <= 32'b0;
-            data_word7      <= 32'b0;
+            packet_done_irq      <= 1'b0;
+            debug_icm_frame      <= '0;
+            data_word0           <= 32'b0;
+            data_word1           <= 32'b0;
+            data_word2           <= 32'b0;
+            data_word3           <= 32'b0;
+            data_word4           <= 32'b0;
+            data_word5           <= 32'b0;
+            data_word6           <= 32'b0;
+            data_word7           <= 32'b0;
         end else begin
             if (axil_clear_error) begin
                 error_latched <= error_events != 0;
@@ -400,7 +396,7 @@ module ctrlsys_core (
             else if (packet_writer_packet_done) sample_count <= sample_count + 1'b1;
 
             missed_intan_count_d <= missed_intan_count;
-            missed_icm_count_d <= missed_icm_count;
+            missed_icm_count_d   <= missed_icm_count;
 
             if (spi_done) debug_icm_frame <= icm_frame;
 

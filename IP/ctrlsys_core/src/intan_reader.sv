@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 /*
  * Synthesizable integration wrapper for the RHD2164 acquisition path.
  *
@@ -13,7 +15,7 @@
  */
 
 module intan_reader #(
-    parameter int MAX_COMMANDS = 64,
+    parameter int MAX_COMMANDS = 34,
     parameter int NUM_INTAN = config_pkg::NUM_INTAN,
     parameter int NUM_CHANNELS_PER_ADC = config_pkg::INTAN_CHANNELS / 2,
     parameter int BITS_PER_WORD = config_pkg::INTAN_BITS_PER_WORD,
@@ -31,6 +33,7 @@ module intan_reader #(
     input logic start_init,
     input logic start_read,
     input logic [63:0] timestamp,
+    output logic initialized,
 
     // Initialization sequence and expected pipelined responses.
     input logic [6:0] init_list_len,
@@ -44,7 +47,9 @@ module intan_reader #(
 
     // Completed frame and status.
     output config_pkg::Intan_frame_t intan_frame,
-    output logic done_pulse,
+    output logic init_done_pulse,
+    output logic frame_done_pulse,
+    output logic busy,
     output logic error,
 
     // Physical RHD2164 bus.  SCLK, MOSI, and CS are shared; each chip has a
@@ -81,6 +86,7 @@ module intan_reader #(
         .start_init(start_init),
         .start_read(start_read),
         .timestamp(timestamp),
+        .initialized(initialized),
         .Intan_frame(intan_frame),
 
         .init_list_len(init_list_len),
@@ -99,8 +105,10 @@ module intan_reader #(
         .rx_ans_list_b (response_list_b),
         .done_seq_pulse(sequence_done_pulse),
 
-        .done(done_pulse),
-        .err (error)
+        .init_done_pulse(init_done_pulse),
+        .frame_done_pulse(frame_done_pulse),
+        .busy(busy),
+        .err(error)
     );
 
     intan_cmd_sequencer #(

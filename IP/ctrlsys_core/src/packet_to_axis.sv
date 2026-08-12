@@ -56,7 +56,7 @@ function automatic logic [KEEP_WIDTH-1:0] keep_for_word(
 begin
     keep = '1;
 
-    if (index == PACKET_WORDS - 1 && PACKET_LAST_BYTES != KEEP_WIDTH) begin
+    if (index == WORD_INDEX_WIDTH'(PACKET_WORDS - 1) && PACKET_LAST_BYTES != KEEP_WIDTH) begin
         keep = '0;
         keep[PACKET_LAST_BYTES-1:0] = '1;
     end
@@ -96,7 +96,7 @@ always_ff @(posedge clk) begin
             CAPTURE_WORD: begin
                 m_axis_tdata <= fifo_rd_data;
                 m_axis_tkeep <= keep_for_word(word_index);
-                m_axis_tlast <= word_index == PACKET_WORDS - 1;
+                m_axis_tlast <= word_index == WORD_INDEX_WIDTH'(PACKET_WORDS - 1);
                 m_axis_tvalid <= 1'b1;
                 state <= SEND_WORD;
             end
@@ -105,7 +105,7 @@ always_ff @(posedge clk) begin
                 if (m_axis_tready) begin
                     m_axis_tvalid <= 1'b0;
 
-                    if (word_index == PACKET_WORDS - 1) begin
+                    if (word_index == WORD_INDEX_WIDTH'(PACKET_WORDS - 1)) begin
                         word_index <= '0;
                         state <= IDLE;
                     end else begin
