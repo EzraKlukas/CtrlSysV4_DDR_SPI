@@ -155,9 +155,10 @@ module ctrlsys_core (
     logic [31:0] data_word6;
     logic [31:0] data_word7;
 
-    logic rst_meta;
-    logic rst_sync;
-    always_ff @(posedge clk or negedge rst_n) begin
+    (* ASYNC_REG = "TRUE" *) logic rst_meta;
+    (* ASYNC_REG = "TRUE" *) logic rst_sync;
+
+    always_ff @(posedge clk) begin
         if (!rst_n) begin
             rst_meta <= 1'b1;
             rst_sync <= 1'b1;
@@ -298,7 +299,7 @@ module ctrlsys_core (
     );
 
     intan_reader #(
-        .MAX_COMMANDS(34),
+        .MAX_COMMANDS(MAX_COMMANDS),
         .NUM_INTAN(NUM_INTAN),
         .NUM_CHANNELS_PER_ADC(INTAN_CHANNELS / 2),
         .BITS_PER_WORD(INTAN_BITS_PER_WORD),

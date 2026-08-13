@@ -442,6 +442,8 @@ def print_packet_trailer(data: bytes, frame_words: int) -> None:
         return
 
     trailer = decode_packet_trailer(data)
+    validation_errors = validate_packet_trailer(data, trailer)
+    valid = not validation_errors
     padding = max(0, trailer.trailer_offset - trailer.valid_data_bytes)
     offsets_preview = ", ".join(
         str(offset)
@@ -449,7 +451,8 @@ def print_packet_trailer(data: bytes, frame_words: int) -> None:
     )
 
     print(
-        f"  Trailer: magic={trailer.magic.hex(' ')} "
+        f"  Trailer: {'valid' if valid else 'INVALID'} "
+        f"magic={trailer.magic.hex(' ')} "
         f"packet_num={trailer.packet_num} "
         f"trailer_bytes={trailer.trailer_bytes} "
         f"packet_bytes={trailer.packet_bytes} "
@@ -465,6 +468,8 @@ def print_packet_trailer(data: bytes, frame_words: int) -> None:
         f"dropped_icm={trailer.dropped_icm_frames} "
         f"padding_bytes={padding} frame_words={frame_words}"
     )
+    if validation_errors:
+        print("  Trailer validation errors: " + "; ".join(validation_errors))
 
 
 def find_plausible_trailer_offsets(data: bytes) -> list[int]:
@@ -605,11 +610,13 @@ def print_captured_trailers(packets: list[CapturedPacket]) -> None:
 
     print("\nDecoded packet trailers:")
     for packet in packets:
+        trailer = decode_packet_trailer(packet.frame_bytes)
         print(
             f"Packet seq={packet.sequence} irq={packet.irq_count} "
             f"core_count={packet.core_count}"
         )
         print_packet_trailer(packet.frame_bytes, packet.frame_words)
+        print_packet_sanity(packet.frame_bytes, trailer)
 
 
 def print_captured_raw_bytes(packets: list[CapturedPacket],
@@ -674,12 +681,29 @@ def plot_records(records: list[SampleRecord]) -> None:
         / 1_000_000
         for index in range(len(records))
     ]
-    fpga_delta_ms = [
-        0.0 if index == 0 else
-        (records[index].fpga_start_ticks - records[index - 1].fpga_start_ticks)
-        * 1_000 / SAMPLE_CLOCK_HZ
-        for index in range(len(records))
-    ]
+    fpga_delta_ms = [float("nan")]
+    timestamp_epoch_resets = 0
+    for previous, current in zip(records, records[1:]):
+        timestamps_are_continuous = (
+            previous.fpga_start_ticks != 0
+            and current.fpga_start_ticks > previous.fpga_start_ticks
+            and current.core_count > previous.core_count
+        )
+        if timestamps_are_continuous:
+            fpga_delta_ms.append(
+                (current.fpga_start_ticks - previous.fpga_start_ticks)
+                * 1_000 / SAMPLE_CLOCK_HZ
+            )
+        else:
+            fpga_delta_ms.append(float("nan"))
+            timestamp_epoch_resets += 1
+
+    if timestamp_epoch_resets:
+        print(
+            "warning: FPGA timestamps/core counts restarted or were not "
+            f"monotonic across {timestamp_epoch_resets} packet transition(s); "
+            "those ICM start intervals are omitted from the plot"
+        )
 
     fig, ax = plt.subplots(figsize=(11, 5))
     ax.plot(x, delta_ms, "o-", color="tab:orange", label="PC inter-arrival")
@@ -690,8 +714,8 @@ def plot_records(records: list[SampleRecord]) -> None:
 
     fpga_ax = ax.twinx()
     fpga_ax.plot(x, fpga_delta_ms, "s--", color="tab:blue",
-                 label="FPGA start inter-arrival")
-    fpga_ax.set_ylabel("FPGA start inter-arrival (ms)")
+                 label="ICM read-start inter-arrival")
+    fpga_ax.set_ylabel("ICM read-start inter-arrival (ms)")
     fpga_ax.tick_params(axis="y", labelcolor="tab:blue")
 
     lines = ax.get_lines() + fpga_ax.get_lines()
@@ -747,6 +771,7 @@ def main() -> int:
     first_perf_ns: int | None = None
     previous_perf_ns: int | None = None
     previous_start_ticks: int | None = None
+    previous_core_count: int | None = None
     records: list[SampleRecord] = []
     captured_packets: list[CapturedPacket] = []
     selected_dma_byte_order: str | None = None
@@ -828,13 +853,21 @@ def main() -> int:
                     done_ticks = (frame[3] << 32) | frame[2]
                 else:
                     start_ticks, done_ticks = packet_timestamps_from_bytes(frame_bytes)
+                timestamps_are_continuous = (
+                    previous_start_ticks is not None
+                    and previous_core_count is not None
+                    and start_ticks > previous_start_ticks
+                    and core_count > previous_core_count
+                )
                 fpga_delta_ticks = (
-                    0 if previous_start_ticks is None or start_ticks == 0
-                    else start_ticks - previous_start_ticks
+                    start_ticks - previous_start_ticks
+                    if timestamps_are_continuous
+                    else 0
                 )
                 fpga_delta_ms = fpga_delta_ticks * 1_000 / SAMPLE_CLOCK_HZ
                 if start_ticks != 0:
                     previous_start_ticks = start_ticks
+                    previous_core_count = core_count
                 read_us = (
                     0.0 if start_ticks == 0
                     else (done_ticks - start_ticks) * 1_000_000 / SAMPLE_CLOCK_HZ

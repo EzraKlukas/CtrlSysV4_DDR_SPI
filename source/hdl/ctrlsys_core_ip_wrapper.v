@@ -29,8 +29,8 @@ module ctrlsys_core_ip_wrapper (
 
     output wire          m_axis_tvalid,
     input  wire          m_axis_tready,
-    output wire [1023:0] m_axis_tdata,
-    output wire [ 127:0] m_axis_tkeep,
+    output wire [63:0] m_axis_tdata,
+    output wire [ 7:0] m_axis_tkeep,
     output wire          m_axis_tlast,
 
     input  wire        s00_axi_aclk,

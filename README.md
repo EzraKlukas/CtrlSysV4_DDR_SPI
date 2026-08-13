@@ -13,7 +13,7 @@ RHD2164 pins
 AXI4-Lite -> control, status, counters, and debug words only
 ```
 
-`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. Regenerate them only through the packaging step after reviewing this checkpoint.
+`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. The checked-in package remains the prior 1.1 generation until `repackage_ctrlsys_core_ip.tcl` can run under a licensed Vivado 2026.1 installation; its source copies still describe the old interface.
 
 ## Production configuration
 
@@ -27,8 +27,8 @@ AXI4-Lite -> control, status, counters, and debug words only
 | Intan SCLK | 2.5 MHz |
 | Intan CS setup / hold | 25 clocks / 200 ns each |
 | Intan CS-high time | 20 clocks / 160 ns |
-| AXI stream width | 1024 bits / 128 bytes |
-| Fixed packet | 24,576 bytes / 192 AXI beats |
+| AXI stream width | 64 bits / 8 bytes |
+| Fixed packet | 24,576 bytes / 3,072 AXI beats |
 | Trailer | 256 bytes at byte 24,320 (`0x5f00`) |
 
 The 2.5 MHz SCLK is intentionally conservative for initial hardware operation. Testbenches may override the divider to reduce simulation time. SPI activity is synchronous to `clk`; changing the fabric clock without recalculating these integer timing constants changes the physical bus timing.
@@ -98,7 +98,7 @@ The trailer uses big-endian 32-bit fields:
 | `0x38` | 192 | 48 Intan start offsets; used entries are `index * 1048` |
 | `0xf8` | 8 | reserved, zero |
 
-The fixed packet size is aligned to the 128-byte AXI word. Consequently every output beat has all `tkeep` bits set and `tlast` is asserted on beat 191. `packet_to_axis` holds `tvalid`, `tdata`, `tkeep`, and `tlast` stable during backpressure.
+The fixed packet size is aligned to the 8-byte AXI word. Consequently all eight `tkeep` bits are asserted on every one of the 3,072 beats, and `tlast` is asserted only on the final beat at index 3,071. `packet_to_axis` holds `tvalid`, `tdata`, `tkeep`, and `tlast` stable during backpressure.
 
 ## AXI4-Lite register map
 
@@ -115,7 +115,7 @@ AXI4-Lite is control/status only. Reset leaves acquisition disabled and sets the
 | `0x18` | R | missed ICM opportunity count |
 | `0x1c` | R | sticky error bitmask described below |
 | `0x20` | R | packet-completion debug word 0: prior packet count |
-| `0x24` | R | debug word 1: packet AXI words, 192 |
+| `0x24` | R | debug word 1: packet AXI words, 3,072 |
 | `0x28` | R | debug word 2: packet-buffer depth in AXI words |
 | `0x2c` | R | debug word 3: ICM start timestamp low word |
 | `0x30` | R | debug word 4: ICM start timestamp high word |
@@ -160,7 +160,7 @@ The current design assumes `clk` and `s00_axi_aclk` are the same fabric clock, a
 
 ## Host tools and DMA lifecycle
 
-`source/cpp/redpitaya/sensor_test_hw.[ch]` defines the register, status, error, frame, and packet constants. The packet-sized interrupt path resets/configures the core once, waits up to two seconds for Intan initialization, resets and starts S2MM once, arms one 24,576-byte transfer, and then enables acquisition once. Each completion is validated and consumed, the DMA interrupt is cleared, and the next buffer transfer is armed without resetting the core or reinitializing the Intans. The core and DMA are disabled only on stop or error recovery.
+`source/cpp/redpitaya/sensor_test_hw.[ch]` defines the register, status, error, frame, and packet constants. The packet-sized interrupt path resets/configures the core once, waits up to two seconds for Intan initialization, resets and starts S2MM once, arms one 24,576-byte transfer, and then enables acquisition once. After each completion, the DMA mapping is synchronized for CPU access and copied before the live buffer is promptly rearmed. Validation, streaming, and printing use the completed copy, never the rearmed DMA buffer. The core and DMA are disabled only on stop or error recovery.
 
 `source/python/redpitaya_dma_receiver.py` validates the fixed trailer and offsets and decodes all 64 big-endian 16-bit channels for each sensor. DMA word byte order may still depend on the processor/DMA capture path; the receiver's existing byte-order scoring remains available for that boundary. `source/python/generate_packet_layout.py` derives Intan sizes from `INTAN_BITS_PER_WORD` and `INTAN_CHANNELS`.
 
@@ -196,9 +196,9 @@ gcc -std=c11 -Wall -Wextra -Wpedantic -fsyntax-only source/cpp/redpitaya/*.c
 
 The following steps are deliberately user-owned and have not been run here:
 
-1. Run `repackage_ctrlsys_core_ip.tcl` to regenerate the packaged IP from `source/hdl`.
-2. Upgrade/replace the core instance in the Vivado block design and expose the new Intan physical ports.
-3. Connect the external shared SCLK/MOSI/CS and eight individual MISO nets.
+1. Run `repackage_ctrlsys_core_ip.tcl` under licensed Vivado 2026.1 to generate and validate `user.org:user:ctrlsys_core:1.2` from `source/hdl`.
+2. Refresh the IP catalog and upgrade/replace the block-design core instance; reconnect its incompatible 64-bit `m_axis` interface.
+3. Expose and connect the external shared Intan SCLK/MOSI/CS and eight individual MISO nets.
 4. Add board-specific XDC package-pin and electrical constraints; no pin assignments are invented here.
 5. Confirm the block design supplies the same 125 MHz clock to `clk` and AXI-Lite, or address CDC explicitly if that is changed.
 6. Run synthesis, inspect inferred memory/resources, close timing, implement, and generate the bitstream.

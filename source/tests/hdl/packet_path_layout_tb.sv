@@ -38,8 +38,14 @@ module packet_path_layout_tb;
     int byte_count = 0;
     int beat_count = 0;
     int packet_done_count = 0;
+    int axis_last_count = 0;
+    int ready_counter = 0;
+    logic stalled = 1'b0;
+    logic [AXIS_DATA_WIDTH-1:0] stalled_data;
+    logic [AXIS_BYTES-1:0] stalled_keep;
+    logic stalled_last;
 
-    always #5 clk = ~clk;
+    always #5 clk <= ~clk;
 
     assign packet_ready = fifo_packet_space;
     assign writer_word_ready = !fifo_full;
@@ -124,9 +130,9 @@ module packet_path_layout_tb;
         begin
             fill_intan(frame_id);
             @(posedge clk);
-            intan_done <= 1'b1;
+            intan_done = 1'b1;
             @(posedge clk);
-            intan_done <= 1'b0;
+            intan_done = 1'b0;
         end
     endtask
 
@@ -134,9 +140,22 @@ module packet_path_layout_tb;
         begin
             fill_icm();
             @(posedge clk);
-            icm_done <= 1'b1;
+            icm_done = 1'b1;
             @(posedge clk);
-            icm_done <= 1'b0;
+            icm_done = 1'b0;
+        end
+    endtask
+
+    task automatic pulse_intan_and_icm(input int frame_id);
+        begin
+            fill_intan(frame_id);
+            fill_icm();
+            @(posedge clk);
+            intan_done = 1'b1;
+            icm_done = 1'b1;
+            @(posedge clk);
+            intan_done = 1'b0;
+            icm_done = 1'b0;
         end
     endtask
 
@@ -154,14 +173,38 @@ module packet_path_layout_tb;
             byte_count <= 0;
             beat_count <= 0;
             packet_done_count <= 0;
+            axis_last_count <= 0;
+            ready_counter <= 0;
+            axis_ready <= 1'b1;
+            stalled <= 1'b0;
         end else begin
+            ready_counter <= ready_counter + 1;
+            axis_ready <= ready_counter[3:0] != 4'h7;
+
+            if (stalled) begin
+                if (!axis_valid || axis_data !== stalled_data ||
+                    axis_keep !== stalled_keep || axis_last !== stalled_last)
+                    $fatal(1, "AXI output changed while backpressured");
+                if (axis_ready) stalled <= 1'b0;
+            end else if (axis_valid && !axis_ready) begin
+                stalled <= 1'b1;
+                stalled_data <= axis_data;
+                stalled_keep <= axis_keep;
+                stalled_last <= axis_last;
+            end
+
             if (writer_packet_done) packet_done_count <= packet_done_count + 1;
 
             if (axis_valid && axis_ready) begin
+                if (axis_keep !== '1)
+                    $fatal(1, "beat %0d did not assert all tkeep bits", beat_count);
+                if (axis_last !== (beat_count == PACKET_AXIS_WORDS - 1))
+                    $fatal(1, "tlast mismatch on beat %0d", beat_count);
                 for (int lane = 0; lane < AXIS_BYTES; lane = lane + 1) begin
                     if (byte_count + lane < PACKET_BYTES)
                         packet_bytes[byte_count+lane] <= axis_data[8*lane+:8];
                 end
+                if (axis_last) axis_last_count <= axis_last_count + 1;
                 byte_count <= byte_count + AXIS_BYTES;
                 beat_count <= beat_count + 1;
             end
@@ -169,15 +212,26 @@ module packet_path_layout_tb;
     end
 
     initial begin
+        if (INTAN_SENSOR_DATA_BYTES != 128)
+            $fatal(1, "production Intan data must be 128 bytes");
+        if ($bits(Intan_measurement_t'(0)) / 8 != 129)
+            $fatal(1, "production Intan measurement must be 129 bytes");
+        if (INTAN_FRAME_BYTES != 1048 || ICM_FRAME_BYTES != 100)
+            $fatal(1, "production frame sizes are incorrect");
+        if (PACKET_BYTES != 24576 || PACKET_TRAILER_OFFSET_BYTES != 24320)
+            $fatal(1, "production packet/trailer layout is incorrect");
+        if (MAX_INTAN_FRAMES_PER_PACKET != 23)
+            $fatal(1, "production packet capacity must be 23 Intan frames");
+        if (AXIS_DATA_WIDTH != 64 || AXIS_BYTES != 8 || PACKET_AXIS_WORDS != 3072)
+            $fatal(1, "production AXI packet geometry is incorrect");
+
         repeat (10) @(posedge clk);
         rst <= 1'b0;
         repeat (5) @(posedge clk);
 
         pulse_intan(1);
-        repeat (600) @(posedge clk);
-        pulse_intan(2);
-        repeat (600) @(posedge clk);
-        pulse_icm();
+        repeat (20) @(posedge clk);
+        pulse_intan_and_icm(2);
 
         wait (axis_valid && axis_ready && axis_last);
         repeat (4) @(posedge clk);
@@ -188,6 +242,8 @@ module packet_path_layout_tb;
             $fatal(1, "expected %0d AXIS beats, got %0d", PACKET_AXIS_WORDS, beat_count);
         if (byte_count != PACKET_BYTES)
             $fatal(1, "expected %0d bytes, got %0d", PACKET_BYTES, byte_count);
+        if (axis_last_count != 1)
+            $fatal(1, "expected one tlast, got %0d", axis_last_count);
         if (fifo_underflow) $fatal(1, "packet FIFO underflowed");
         if (fifo_overflow) $fatal(1, "packet FIFO overflowed");
 
@@ -204,10 +260,32 @@ module packet_path_layout_tb;
             $fatal(1, "bad trailer_bytes: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 12));
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 16) != PACKET_BYTES)
             $fatal(1, "bad packet_bytes: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 16));
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 20) != 2196)
+            $fatal(1, "bad valid_data_bytes: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 20));
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 24) != 2)
+            $fatal(1, "bad Intan frame count: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 24));
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 28) != MAX_INTAN_FRAMES_PER_PACKET)
+            $fatal(1, "bad maximum Intan frame count");
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 32) != 1)
+            $fatal(1, "bad ICM frame count");
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 36) != 2096)
+            $fatal(1, "bad ICM frame start: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 36));
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 40) != PACKET_TRAILER_OFFSET_BYTES)
             $fatal(1, "bad trailer_start_index: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 40));
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 44) != 0 ||
+            be32(PACKET_TRAILER_OFFSET_BYTES + 48) != 0 ||
+            be32(PACKET_TRAILER_OFFSET_BYTES + 52) != 0)
+            $fatal(1, "packet unexpectedly reported dropped frames");
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 56) != 0 ||
+            be32(PACKET_TRAILER_OFFSET_BYTES + 60) != INTAN_FRAME_BYTES)
+            $fatal(1, "bad Intan frame offsets");
 
         $display("PASS packet_path_layout_tb");
         $finish;
+    end
+
+    initial begin : timeout
+        #1ms;
+        $fatal(1, "packet_path_layout_tb timed out");
     end
 endmodule

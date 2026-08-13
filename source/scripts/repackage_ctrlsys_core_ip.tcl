@@ -19,7 +19,7 @@ proc ctrlsys_usage {} {
     puts "  -vendor <vendor>  VLNV vendor. Default: user.org"
     puts "  -library <lib>    VLNV library. Default: user"
     puts "  -name <name>      VLNV name. Default: ctrlsys_core"
-    puts "  -version <ver>    VLNV version. Default: 1.1"
+    puts "  -version <ver>    VLNV version. Default: 1.2"
     puts "  -taxonomy <path>  IP catalog taxonomy. Default: /UserIP"
 }
 
@@ -36,7 +36,7 @@ proc ctrlsys_parse_args {repo_root} {
         vendor user.org \
         library user \
         name ctrlsys_core \
-        version 1.1 \
+        version 1.2 \
         taxonomy /UserIP \
         internal_run 0]
 

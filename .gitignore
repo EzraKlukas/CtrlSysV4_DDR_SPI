@@ -5,3 +5,7 @@ build/
 obj_dir/
 obj_dir_debug/
 *.fst
+__pycache__/
+*.py[cod]
+vivado*.jou
+vivado*.log

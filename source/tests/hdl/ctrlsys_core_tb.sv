@@ -62,7 +62,9 @@ module ctrlsys_core_tb;
     int packet_count = 0;
     int packet_byte_count = 0;
     int packet_beat_count = 0;
+    int total_beat_count = 0;
     int ready_counter = 0;
+    logic [31:0] sample_count_at_packet[0:1];
     logic stalled = 1'b0;
     logic [config_pkg::AXIS_DATA_WIDTH-1:0] stalled_data;
     logic [config_pkg::AXIS_BYTES-1:0] stalled_keep;
@@ -210,6 +212,7 @@ module ctrlsys_core_tb;
             packet_count <= 0;
             packet_byte_count <= 0;
             packet_beat_count <= 0;
+            total_beat_count <= 0;
             ready_counter <= 0;
             axis_ready <= 1'b1;
             stalled <= 1'b0;
@@ -240,6 +243,7 @@ module ctrlsys_core_tb;
                         axis_data[8*lane+:8];
 
                 if (axis_last) begin
+                    sample_count_at_packet[packet_count] <= dut.sample_count;
                     packet_count <= packet_count + 1;
                     packet_byte_count <= 0;
                     packet_beat_count <= 0;
@@ -247,6 +251,7 @@ module ctrlsys_core_tb;
                     packet_byte_count <= packet_byte_count + config_pkg::AXIS_BYTES;
                     packet_beat_count <= packet_beat_count + 1;
                 end
+                total_beat_count <= total_beat_count + 1;
             end
         end
     end
@@ -292,7 +297,14 @@ module ctrlsys_core_tb;
         if (packet_count != 2) fail("timed out waiting for two complete AXI packets");
         #1ps;
 
+        if (total_beat_count != 2 * config_pkg::PACKET_AXIS_WORDS)
+            fail("two packets did not contain exactly 6,144 accepted AXI beats");
+        if (sample_count_at_packet[0] != 1 || sample_count_at_packet[1] != 2)
+            fail("sample counter was not monotonic across consecutive packets");
+
         trailer = config_pkg::PACKET_TRAILER_OFFSET_BYTES;
+        if (packet_be32(0, trailer + 8) != 0 || packet_be32(1, trailer + 8) != 1)
+            fail("packet counter was not monotonic across consecutive packets");
         if (packet_be32(1, trailer + 20) !=
             2 * config_pkg::INTAN_FRAME_BYTES + config_pkg::ICM_FRAME_BYTES)
             fail("second packet valid_data_bytes mismatch");
@@ -323,7 +335,10 @@ module ctrlsys_core_tb;
         if (value != 0) fail("unexpected missed Intan read count");
         axil_read(6'h18, value);
         if (value != 0) fail("unexpected missed ICM read count");
+        axil_read(6'h14, value);
+        if (value != 2) fail("AXI-Lite sample counter did not report two packets");
         axil_read(6'h10, value);
+        if (value & STATUS_ERROR) fail("core reported an error during nominal acquisition");
         if ((value & STATUS_PACKET_DONE) == 0)
             fail("packet completion was not visible through AXI-Lite");
         axil_write(6'h0c, 32'h0000_0004);

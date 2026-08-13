@@ -23,6 +23,9 @@ module packet_to_axis_packet_available_tb;
     logic [DATA_WIDTH-1:0] tdata;
     logic [DATA_WIDTH/8-1:0] tkeep;
     logic tlast;
+    logic [DATA_WIDTH-1:0] stalled_data;
+    logic [DATA_WIDTH/8-1:0] stalled_keep;
+    logic stalled_last;
     int index;
     int seen;
 
@@ -89,15 +92,50 @@ module packet_to_axis_packet_available_tb;
                 $fatal(1, "stream started before a complete packet was available");
         end
 
+        tready = 1'b0;
         write_word(32'hA500_0000 | (PACKET_WORDS - 1));
+
+        wait (tvalid);
+        @(negedge clk);
+        stalled_data = tdata;
+        stalled_keep = tkeep;
+        stalled_last = tlast;
+        repeat (3) begin
+            @(negedge clk);
+            if (!tvalid || tdata !== stalled_data || tkeep !== stalled_keep ||
+                tlast !== stalled_last)
+                $fatal(1, "AXI output changed while backpressured");
+        end
+        tready = 1'b1;
 
         while (seen < PACKET_WORDS) begin
             @(posedge clk);
             if (tvalid && tready) begin
                 if (tdata !== (32'hA500_0000 | seen[31:0]))
                     $fatal(1, "beat %0d data mismatch: 0x%08h", seen, tdata);
+                if (tkeep !== '1)
+                    $fatal(1, "beat %0d did not assert all tkeep bits", seen);
                 if (tlast !== (seen == PACKET_WORDS - 1))
                     $fatal(1, "beat %0d tlast mismatch: %0b", seen, tlast);
+                seen = seen + 1;
+            end
+        end
+
+        for (index = 0; index < PACKET_WORDS; index = index + 1)
+            write_word(32'hA600_0000 | index[31:0]);
+
+        while (seen < 2 * PACKET_WORDS) begin
+            @(posedge clk);
+            if (tvalid && tready) begin
+                if (tdata !== (32'hA600_0000 | (seen - PACKET_WORDS)))
+                    $fatal(1, "second packet beat %0d data mismatch: 0x%08h",
+                           seen - PACKET_WORDS, tdata);
+                if (tkeep !== '1)
+                    $fatal(1, "second packet beat %0d had partial tkeep",
+                           seen - PACKET_WORDS);
+                if (tlast !== (seen == 2 * PACKET_WORDS - 1))
+                    $fatal(1, "second packet beat %0d tlast mismatch",
+                           seen - PACKET_WORDS);
                 seen = seen + 1;
             end
         end
@@ -105,6 +143,8 @@ module packet_to_axis_packet_available_tb;
         repeat (4) @(posedge clk);
         if (underflow)
             $fatal(1, "packet reader underflowed");
+        if (overflow)
+            $fatal(1, "packet buffer overflowed");
 
         $display("PASS packet_to_axis_packet_available_tb");
         $finish;
