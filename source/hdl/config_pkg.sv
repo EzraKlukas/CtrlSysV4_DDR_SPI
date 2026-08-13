@@ -6,7 +6,9 @@ package config_pkg;
     localparam int INTAN_DATA_BYTES = 64;
     localparam int INTAN_SAMPLING_RATIO = 30;
     localparam int BUFFER_SIZE = 10;
-    localparam int AXIS_DATA_WIDTH = 1024;
+    // Match the Zynq-7000 S_AXI_HP port width. Wider DMA interfaces require
+    // a hardware-only down-converter that can split packet-buffer words.
+    localparam int AXIS_DATA_WIDTH = 64;
     localparam int PACKET_BYTES = 24576;
 
     // measurement = one sensor's data
@@ -35,9 +37,9 @@ package config_pkg;
         Intan_measurement_t [NUM_INTAN-1:0] Intan_data;
     } Intan_frame_t;
 
-    localparam int AXIS_BYTES = AXIS_DATA_WIDTH / 8;
-    localparam int ICM_FRAME_BITS = $bits(ICM_frame_t);
-    localparam int INTAN_FRAME_BITS = $bits(Intan_frame_t);
+    localparam int AXIS_BYTES = (AXIS_DATA_WIDTH / 8);
+    localparam int ICM_FRAME_BITS = $bits(ICM_frame_t'(0));
+    localparam int INTAN_FRAME_BITS = $bits(Intan_frame_t'(0));
     localparam int ICM_FRAME_BYTES = ICM_FRAME_BITS / 8;
     localparam int INTAN_FRAME_BYTES = INTAN_FRAME_BITS / 8;
     localparam int PACKET_TRAILER_BYTES = 256;
@@ -78,7 +80,7 @@ package config_pkg;
         packet_trailer_t trailer;
     } packet_t;
 
-    localparam int PACKET_TRAILER_BITS = $bits(packet_trailer_t);
+    localparam int PACKET_TRAILER_BITS = $bits(packet_trailer_t'(0));
     localparam int PACKET_TRAILER_BITS_EXPECTED = 8 * PACKET_TRAILER_BYTES;
     localparam int MAX_PACKET_VALID_BYTES = MAX_PACKET_DATA_BYTES + PACKET_TRAILER_BYTES;
     localparam int PACKET_PAYLOAD_BITS = 8 * MAX_PACKET_VALID_BYTES;

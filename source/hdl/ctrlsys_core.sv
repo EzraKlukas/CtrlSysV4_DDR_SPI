@@ -119,9 +119,9 @@ logic [31:0] data_word7;
 
 integer frame_sensor_index;
 
-logic rst_meta;
-logic rst_sync;
-always_ff @(posedge clk or negedge rst_n) begin
+(* ASYNC_REG = "TRUE" *) logic rst_meta;
+(* ASYNC_REG = "TRUE" *) logic rst_sync;
+always_ff @(posedge clk) begin
     if (!rst_n) begin
         rst_meta <= 1'b1;
         rst_sync <= 1'b1;
