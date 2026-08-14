@@ -13,7 +13,7 @@ RHD2164 pins
 AXI4-Lite -> control, status, counters, and debug words only
 ```
 
-`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. The checked-in package remains the prior 1.1 generation until `repackage_ctrlsys_core_ip.tcl` can run under a licensed Vivado 2026.1 installation; its source copies still describe the old interface.
+`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. The checked-in package contains the updated interface as version 1.2.
 
 ## Production configuration
 
