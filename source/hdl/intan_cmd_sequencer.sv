@@ -28,6 +28,8 @@ module intan_cmd_sequencer #(
     logic running_sequence;
     integer sensor_idx;
 
+    localparam INTAN_MASK = config_pkg::INTAN_MASK;
+
     always_ff @(posedge clk) begin
         if (rst) begin
             rx_ans_list_a <= '0;
@@ -50,8 +52,8 @@ module intan_cmd_sequencer #(
             end else if (running_sequence && done_pulse) begin
                 if (cmd_cnt >= 2 && cmd_cnt < cmd_list_len + 2) begin
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                        rx_ans_list_a[cmd_cnt-2][sensor_idx] <= rx_ans_a[sensor_idx];
-                        rx_ans_list_b[cmd_cnt-2][sensor_idx] <= rx_ans_b[sensor_idx];
+                        rx_ans_list_a[cmd_cnt-2][sensor_idx] <= INTAN_MASK[sensor_idx] ? rx_ans_a[sensor_idx] : '0;
+                        rx_ans_list_b[cmd_cnt-2][sensor_idx] <= INTAN_MASK[sensor_idx] ? rx_ans_b[sensor_idx] : '0;
                     end
                 end
 

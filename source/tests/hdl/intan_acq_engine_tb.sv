@@ -5,8 +5,9 @@ module intan_acq_engine_tb;
 
     localparam time CLK_PERIOD = 8ns;
 
-    localparam int MAX_COMMANDS = 34;
-    localparam int NUM_INTAN = 1;
+    localparam int MAX_COMMANDS = 64;
+    localparam int NUM_INTAN = 8;
+    localparam logic [NUM_INTAN-1:0] intan_mask = config_pkg::INTAN_MASK;
     localparam int NUM_CHAN = 32;
     localparam int BITS_PER_WORD = 16;
 
@@ -40,7 +41,7 @@ module intan_acq_engine_tb;
 
     config_pkg::Intan_frame_t Intan_frame;
 
-    logic [6:0] init_list_len = 7'(MAX_COMMANDS);
+    logic [6:0] init_list_len = 7'(34);
     logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] init_cmd_list;
     logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_init_list_expect_a;
     logic [MAX_COMMANDS-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_init_list_expect_b;
@@ -49,7 +50,7 @@ module intan_acq_engine_tb;
     logic [NUM_CHAN-1:0][NUM_INTAN-1:0][BITS_PER_WORD-1:0] rx_acq_list_expect_b;  // for testing.
 
     logic [6:0] acq_list_len = 7'b0100000;
-    logic [NUM_CHAN-1:0][BITS_PER_WORD-1:0] acq_cmd_list;
+    logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] acq_cmd_list;
 
     logic [6:0] cmd_list_len = 0;
     logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] tx_cmd_list;
@@ -83,8 +84,8 @@ module intan_acq_engine_tb;
         begin
             init_cmd_list[command_idx] = command;
             for (int sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                rx_init_list_expect_a[command_idx][sensor_idx] = response;
-                rx_init_list_expect_b[command_idx][sensor_idx] = response;
+                rx_init_list_expect_a[command_idx][sensor_idx] = intan_mask[sensor_idx] ? response : '0;
+                rx_init_list_expect_b[command_idx][sensor_idx] = intan_mask[sensor_idx] ? response : '0;
             end
         end
     endtask
@@ -146,8 +147,10 @@ module intan_acq_engine_tb;
 
             for (int intan_idx = 0; intan_idx < NUM_INTAN; intan_idx = intan_idx + 1) begin
                 automatic logic [15:0] sensor_offset = intan_idx * 16'h0100;
-                rx_acq_list_expect_a[ch_idx-1][intan_idx] = sensor_offset + rx_expect;
-                rx_acq_list_expect_b[ch_idx-1][intan_idx] = sensor_offset + rx_expect + 16'h0020;
+                if (intan_mask[intan_idx]) begin
+                    rx_acq_list_expect_a[ch_idx-1][intan_idx] = sensor_offset + rx_expect;
+                    rx_acq_list_expect_b[ch_idx-1][intan_idx] = sensor_offset + rx_expect + 16'h0020;
+                end
             end
         end
     end

@@ -1,12 +1,14 @@
 set script_dir [file normalize [file dirname [info script]]]
-set project_path [file normalize [file join $script_dir .. .. Vivado_CtrlSysV4 Vivado_CtrlSysV4.xpr]]
+set project_path [file normalize [file join $script_dir .. .. Vivado_CtrlSysV5_2026_1 Vivado_CtrlSysV5_2026_1.xpr]]
 set repo_root [file normalize [file join $script_dir .. ..]]
-set bit_src [file normalize [file join $repo_root Vivado_CtrlSysV4 Vivado_CtrlSysV4.runs impl_1 design_1_wrapper.bit]]
+set bit_src \
+    [file normalize \
+    [file join $repo_root Vivado_CtrlSysV5_2026_1 Vivado_CtrlSysV5_2026_1.runs impl_1 design_1_wrapper.bit]]
 set bit_dst [file normalize [file join $repo_root build design_1_wrapper.bit]]
 
 open_project $project_path
-catch {config_ip_cache -disable_cache}
-catch {config_ip_cache -clear_local_cache}
+catch { config_ip_cache -disable_cache }
+catch { config_ip_cache -clear_local_cache }
 update_ip_catalog -rebuild
 
 set core_ips [get_ips -all -quiet *ctrlsys_core*]
@@ -16,8 +18,8 @@ if {[llength $core_ips] > 0} {
     }
 
     foreach core_ip $core_ips {
-        catch {reset_target all $core_ip}
-        catch {generate_target all $core_ip}
+        catch { reset_target all $core_ip }
+        catch { generate_target all $core_ip }
     }
 }
 
@@ -30,8 +32,10 @@ foreach core_run $core_runs {
     wait_on_run $core_run
     set core_status [get_property STATUS [get_runs $core_run]]
     puts "$core_run status: $core_status"
-    if {![string match "synth_design Complete*" $core_status] &&
-        ![string match "Using cached IP results*" $core_status]} {
+    if {
+        ![string match "synth_design Complete*" $core_status]
+        && ![string match "Using cached IP results*" $core_status]
+    } {
         error "$core_run did not complete: $core_status"
     }
 }

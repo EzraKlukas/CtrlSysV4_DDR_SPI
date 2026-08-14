@@ -1,7 +1,7 @@
 {
   "design": {
     "design_info": {
-      "boundary_crc": "0x95197EFAE00141EF",
+      "boundary_crc": "0x7706F3B7B47F10A0",
       "device": "xc7z020clg400-1",
       "gen_directory": "../../../../Vivado_CtrlSysV5_2026_1.gen/sources_1/bd/design_1",
       "name": "design_1",
@@ -219,11 +219,25 @@
         "direction": "I",
         "left": "3",
         "right": "0"
+      },
+      "intan_miso_0": {
+        "direction": "I",
+        "left": "7",
+        "right": "0"
+      },
+      "intan_sclk_0": {
+        "direction": "O"
+      },
+      "intan_mosi_0": {
+        "direction": "O"
+      },
+      "intan_cs_n_0": {
+        "direction": "O"
       }
     },
     "components": {
       "ctrlsys_core_0": {
-        "vlnv": "user.org:user:ctrlsys_core:1.1",
+        "vlnv": "user.org:user:ctrlsys_core:1.2",
         "ip_revision": "1",
         "xci_name": "design_1_ctrlsys_core_0_0",
         "xci_path": "ip/design_1_ctrlsys_core_0_0/design_1_ctrlsys_core_0_0.xci",
@@ -1049,6 +1063,24 @@
           "processing_system7_0/IRQ_F2P"
         ]
       },
+      "ctrlsys_core_0_intan_cs_n": {
+        "ports": [
+          "ctrlsys_core_0/intan_cs_n",
+          "intan_cs_n_0"
+        ]
+      },
+      "ctrlsys_core_0_intan_mosi": {
+        "ports": [
+          "ctrlsys_core_0/intan_mosi",
+          "intan_mosi_0"
+        ]
+      },
+      "ctrlsys_core_0_intan_sclk": {
+        "ports": [
+          "ctrlsys_core_0/intan_sclk",
+          "intan_sclk_0"
+        ]
+      },
       "ctrlsys_core_0_spi_cs_n": {
         "ports": [
           "ctrlsys_core_0/spi_cs_n",
@@ -1067,6 +1099,12 @@
           "spi_sclk_0"
         ]
       },
+      "intan_miso_0_1": {
+        "ports": [
+          "intan_miso_0",
+          "ctrlsys_core_0/intan_miso"
+        ]
+      },
       "processing_system7_0_FCLK_CLK0": {
         "ports": [
           "processing_system7_0/FCLK_CLK0",
@@ -1079,10 +1117,10 @@
           "axi_quad_spi_0/ext_spi_clk",
           "axi_quad_spi_0/s_axi_aclk",
           "axi_smc/aclk",
-          "ctrlsys_core_0/clk",
-          "ctrlsys_core_0/s00_axi_aclk",
           "processing_system7_0/M_AXI_GP0_ACLK",
-          "processing_system7_0/S_AXI_HP0_ACLK"
+          "processing_system7_0/S_AXI_HP0_ACLK",
+          "ctrlsys_core_0/clk",
+          "ctrlsys_core_0/s00_axi_aclk"
         ]
       },
       "processing_system7_0_FCLK_RESET0_N": {

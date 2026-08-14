@@ -1,8 +1,7 @@
 `timescale 1ns / 1ps
 
 module ctrlsys_core_tb;
-    timeunit 1ns;
-    timeprecision 1ps;
+    timeunit 1ns; timeprecision 1ps;
 
     localparam time CLK_PERIOD = 8ns;
     localparam logic [31:0] STATUS_ERROR = 32'h0000_0002;
@@ -149,16 +148,16 @@ module ctrlsys_core_tb;
         begin
             @(negedge clk);
             while (!axi_awready || !axi_wready) @(negedge clk);
-            axi_awaddr = address;
+            axi_awaddr  = address;
             axi_awvalid = 1'b1;
-            axi_wdata = data;
-            axi_wstrb = 4'hf;
-            axi_wvalid = 1'b1;
+            axi_wdata   = data;
+            axi_wstrb   = 4'hf;
+            axi_wvalid  = 1'b1;
             @(posedge clk);
             @(negedge clk);
             axi_awvalid = 1'b0;
-            axi_wvalid = 1'b0;
-            axi_bready = 1'b1;
+            axi_wvalid  = 1'b0;
+            axi_bready  = 1'b1;
             while (!axi_bvalid) @(negedge clk);
             if (axi_bresp != 2'b00) fail("AXI-Lite write returned non-OKAY response");
             @(negedge clk);
@@ -170,12 +169,12 @@ module ctrlsys_core_tb;
         begin
             @(negedge clk);
             while (!axi_arready) @(negedge clk);
-            axi_araddr = address;
+            axi_araddr  = address;
             axi_arvalid = 1'b1;
             @(posedge clk);
             @(negedge clk);
             axi_arvalid = 1'b0;
-            axi_rready = 1'b1;
+            axi_rready  = 1'b1;
             while (!axi_rvalid) @(negedge clk);
             if (axi_rresp != 2'b00) fail("AXI-Lite read returned non-OKAY response");
             data = axi_rdata;
@@ -191,10 +190,10 @@ module ctrlsys_core_tb;
         begin
             status = value ^ mask;
             for (reads = 0; reads < max_reads && (status & mask) != value; reads++)
-                axil_read(6'h10, status);
+            axil_read(6'h10, status);
             if ((status & mask) != value)
-                fail($sformatf("status timeout: got 0x%08h mask 0x%08h value 0x%08h",
-                               status, mask, value));
+                fail($sformatf(
+                     "status timeout: got 0x%08h mask 0x%08h value 0x%08h", status, mask, value));
         end
     endtask
 
@@ -239,8 +238,7 @@ module ctrlsys_core_tb;
                     fail("AXI tlast was not on the final packet word");
 
                 for (int lane = 0; lane < config_pkg::AXIS_BYTES; lane++)
-                    packet_bytes[packet_count][packet_byte_count+lane] <=
-                        axis_data[8*lane+:8];
+                packet_bytes[packet_count][packet_byte_count+lane] <= axis_data[8*lane+:8];
 
                 if (axis_last) begin
                     sample_count_at_packet[packet_count] <= dut.sample_count;
@@ -265,14 +263,13 @@ module ctrlsys_core_tb;
         repeat (10) @(posedge clk);
         rst_n = 1'b1;
 
-        wait_status(STATUS_INTAN_INIT_ERROR | STATUS_ERROR,
-                    STATUS_INTAN_INIT_ERROR | STATUS_ERROR, 20000);
+        wait_status(STATUS_INTAN_INIT_ERROR | STATUS_ERROR, STATUS_INTAN_INIT_ERROR | STATUS_ERROR,
+                    20000);
         $display("Observed expected initialization failure at %0t", $realtime);
         axil_read(6'h1c, value);
         if ((value & ERROR_INTAN_INIT) == 0)
             fail("initialization error was absent from error_code bitmask");
-        if (packet_count != 0 || axis_valid)
-            fail("failed initialization produced AXI stream data");
+        if (packet_count != 0 || axis_valid) fail("failed initialization produced AXI stream data");
 
         intan_fault[0] = 1'b0;
         wait_status(STATUS_INTAN_INITIALIZED, STATUS_INTAN_INITIALIZED, 40000);
@@ -305,30 +302,32 @@ module ctrlsys_core_tb;
         trailer = config_pkg::PACKET_TRAILER_OFFSET_BYTES;
         if (packet_be32(0, trailer + 8) != 0 || packet_be32(1, trailer + 8) != 1)
             fail("packet counter was not monotonic across consecutive packets");
-        if (packet_be32(1, trailer + 20) !=
-            2 * config_pkg::INTAN_FRAME_BYTES + config_pkg::ICM_FRAME_BYTES)
+        if (packet_be32(
+                1, trailer + 20
+            ) != 2 * config_pkg::INTAN_FRAME_BYTES + config_pkg::ICM_FRAME_BYTES)
             fail("second packet valid_data_bytes mismatch");
         if (packet_be32(1, trailer + 24) != 2)
             fail("second packet did not contain the nominal two Intan frames");
         if (packet_be32(1, trailer + 28) != config_pkg::MAX_INTAN_FRAMES_PER_PACKET)
             fail("packet capacity field mismatch");
-        if (packet_be32(1, trailer + 32) != 1)
-            fail("ICM frame count mismatch");
+        if (packet_be32(1, trailer + 32) != 1) fail("ICM frame count mismatch");
         if (packet_be32(1, trailer + 36) != 2 * config_pkg::INTAN_FRAME_BYTES)
             fail("ICM frame offset mismatch");
-        if (packet_be32(1, trailer + 40) != trailer)
-            fail("trailer offset mismatch");
+        if (packet_be32(1, trailer + 40) != trailer) fail("trailer offset mismatch");
         if (packet_be32(1, trailer + 48) != 0 || packet_be32(1, trailer + 52) != 0)
             fail("packet reported dropped frames");
-        if (packet_be32(1, trailer + 56) != 0 ||
-            packet_be32(1, trailer + 60) != config_pkg::INTAN_FRAME_BYTES)
+        if (packet_be32(
+                1, trailer + 56
+            ) != 0 || packet_be32(
+                1, trailer + 60
+            ) != config_pkg::INTAN_FRAME_BYTES)
             fail("Intan frame offsets mismatch");
 
         if (packet_bytes[1][16] != 8'd7)
             fail("serialized sensor order did not begin with sensor 7");
-        if ({packet_bytes[1][17], packet_bytes[1][18]} != 16'h173f)
+        if ({packet_bytes[1][17], packet_bytes[1][18]} != (config_pkg::INTAN_MASK[7] ? 16'h173f : 16'h0))
             fail("sensor 7 channel 63 byte order mismatch");
-        if ({packet_bytes[1][143], packet_bytes[1][144]} != 16'h1700)
+        if ({packet_bytes[1][143], packet_bytes[1][144]} != (config_pkg::INTAN_MASK[7] ? 16'h1700 : 16'h0))
             fail("sensor 7 channel 0 byte order mismatch");
 
         axil_read(6'h08, value);

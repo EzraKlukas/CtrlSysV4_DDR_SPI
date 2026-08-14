@@ -330,7 +330,7 @@ module integrate_intan_packet_path_layout_tb;
         int unsigned sample;
         begin
             sample = 32'h1000 + sensor_idx * 32'h0100 + channel_idx;
-            expected_sample = sample[15:0];
+            expected_sample = config_pkg::INTAN_MASK[sensor_idx] ? sample[15:0] : '0;
         end
     endfunction
 
@@ -515,7 +515,9 @@ module integrate_intan_packet_path_layout_tb;
             if (be32(PACKET_TRAILER_OFFSET_BYTES + 28) != MAX_INTAN_FRAMES_PER_PACKET)
                 fail($sformatf(
                      "bad max_intan_frame_count: %0d expected %0d",
-                     be32(PACKET_TRAILER_OFFSET_BYTES + 28),
+                     be32(
+                         PACKET_TRAILER_OFFSET_BYTES + 28
+                     ),
                      MAX_INTAN_FRAMES_PER_PACKET
                      ));
             if (be32(PACKET_TRAILER_OFFSET_BYTES + 32) != 1)
@@ -585,7 +587,8 @@ module integrate_intan_packet_path_layout_tb;
             if (reader_frame_done_pulse) begin
                 if (!reader_initialized) fail("frame_done_pulse asserted before initialization");
                 forwarded_frame_count <= forwarded_frame_count + 1;
-                if (read_completion_count >= 2) fail("more than two Intan read completions observed");
+                if (read_completion_count >= 2)
+                    fail("more than two Intan read completions observed");
 
                 reader_snapshots[read_completion_count] <= reader_intan_frame;
                 read_completion_count <= read_completion_count + 1;
@@ -613,9 +616,9 @@ module integrate_intan_packet_path_layout_tb;
                 if (axis_ready) stalled_valid <= 1'b0;
             end else if (axis_valid && !axis_ready) begin
                 stalled_valid <= 1'b1;
-                stalled_data <= axis_data;
-                stalled_keep <= axis_keep;
-                stalled_last <= axis_last;
+                stalled_data  <= axis_data;
+                stalled_keep  <= axis_keep;
+                stalled_last  <= axis_last;
             end
 
             if (writer_packet_done) packet_done_count <= packet_done_count + 1;
@@ -652,6 +655,11 @@ module integrate_intan_packet_path_layout_tb;
                 beat_count <= beat_count + 1;
             end
         end
+    end
+
+    initial begin
+        $dumpfile("integrate_intan_packet_path_layout.fst");
+        $dumpvars(0, integrate_intan_packet_path_layout_tb);
     end
 
     initial begin : test_reader_to_packet_path

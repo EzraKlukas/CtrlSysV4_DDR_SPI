@@ -4,6 +4,7 @@ module intan_program_tb;
     localparam int MAX_COMMANDS = 34;
     localparam int NUM_INTAN = config_pkg::NUM_INTAN;
     localparam int BITS_PER_WORD = config_pkg::INTAN_BITS_PER_WORD;
+    localparam logic [NUM_INTAN-1:0] INTAN_MASK = config_pkg::INTAN_MASK;
 
     logic [6:0] init_list_len;
     logic [MAX_COMMANDS-1:0][BITS_PER_WORD-1:0] init_cmd_list;
@@ -65,44 +66,48 @@ module intan_program_tb;
         endcase
     endfunction
 
-    function automatic logic [15:0] expected_init_resp(input int index);
-        unique case (index)
-            0: expected_init_resp = 16'h0004;
-            1: expected_init_resp = 16'h0004;
-            2: expected_init_resp = 16'h0004;
-            3: expected_init_resp = 16'h0004;
-            4: expected_init_resp = 16'h0004;
-            5: expected_init_resp = 16'h0004;
-            6: expected_init_resp = 16'h0004;
-            7: expected_init_resp = 16'h0004;
-            8: expected_init_resp = 16'h0004;
-            9: expected_init_resp = 16'h0000;
-            10: expected_init_resp = 16'hFFFF;
-            11: expected_init_resp = 16'hFFFF;
-            12: expected_init_resp = 16'hFFFF;
-            13: expected_init_resp = 16'hFFFF;
-            14: expected_init_resp = 16'hFFFF;
-            15: expected_init_resp = 16'hFFFF;
-            16: expected_init_resp = 16'hFFFF;
-            17: expected_init_resp = 16'hFFFF;
-            18: expected_init_resp = 16'hFF86;
-            19: expected_init_resp = 16'hFF2C;
-            20: expected_init_resp = 16'hFF80;
-            21: expected_init_resp = 16'hFF17;
-            22: expected_init_resp = 16'hFF80;
-            23: expected_init_resp = 16'hFF16;
-            24: expected_init_resp = 16'hFF00;
-            25: expected_init_resp = 16'hFF80;
-            26: expected_init_resp = 16'hFF40;
-            27: expected_init_resp = 16'hFF80;
-            28: expected_init_resp = 16'hFF00;
-            29: expected_init_resp = 16'hFF04;
-            30: expected_init_resp = 16'hFF42;
-            31: expected_init_resp = 16'hFFDE;
-            32: expected_init_resp = 16'h0004;
-            33: expected_init_resp = 16'h0004;
-            default: expected_init_resp = 16'h0000;
-        endcase
+    function automatic logic [15:0] expected_init_resp(input int index, input int sensor);
+        if (INTAN_MASK[sensor]) begin
+            unique case (index)
+                0: expected_init_resp = 16'h0004;
+                1: expected_init_resp = 16'h0004;
+                2: expected_init_resp = 16'h0004;
+                3: expected_init_resp = 16'h0004;
+                4: expected_init_resp = 16'h0004;
+                5: expected_init_resp = 16'h0004;
+                6: expected_init_resp = 16'h0004;
+                7: expected_init_resp = 16'h0004;
+                8: expected_init_resp = 16'h0004;
+                9: expected_init_resp = 16'h0000;
+                10: expected_init_resp = 16'hFFFF;
+                11: expected_init_resp = 16'hFFFF;
+                12: expected_init_resp = 16'hFFFF;
+                13: expected_init_resp = 16'hFFFF;
+                14: expected_init_resp = 16'hFFFF;
+                15: expected_init_resp = 16'hFFFF;
+                16: expected_init_resp = 16'hFFFF;
+                17: expected_init_resp = 16'hFFFF;
+                18: expected_init_resp = 16'hFF86;
+                19: expected_init_resp = 16'hFF2C;
+                20: expected_init_resp = 16'hFF80;
+                21: expected_init_resp = 16'hFF17;
+                22: expected_init_resp = 16'hFF80;
+                23: expected_init_resp = 16'hFF16;
+                24: expected_init_resp = 16'hFF00;
+                25: expected_init_resp = 16'hFF80;
+                26: expected_init_resp = 16'hFF40;
+                27: expected_init_resp = 16'hFF80;
+                28: expected_init_resp = 16'hFF00;
+                29: expected_init_resp = 16'hFF04;
+                30: expected_init_resp = 16'hFF42;
+                31: expected_init_resp = 16'hFFDE;
+                32: expected_init_resp = 16'h0004;
+                33: expected_init_resp = 16'h0004;
+                default: expected_init_resp = 16'h0000;
+            endcase
+        end else begin
+            expected_init_resp = 16'h0000;
+        end
     endfunction
 
     function automatic logic [15:0] expected_acq_cmd(input int index);
@@ -151,19 +156,49 @@ module intan_program_tb;
 
         for (int index = 0; index < MAX_COMMANDS; index = index + 1) begin
             if (init_cmd_list[index] !== expected_init_cmd(index))
-                $fatal(1, "init command %0d got 0x%04h expected 0x%04h",
-                       index, init_cmd_list[index], expected_init_cmd(index));
+                $fatal(
+                    1,
+                    "init command %0d got 0x%04h expected 0x%04h",
+                    index,
+                    init_cmd_list[index],
+                    expected_init_cmd(
+                        index
+                    )
+                );
             if (acq_cmd_list[index] !== expected_acq_cmd(index))
-                $fatal(1, "acq command %0d got 0x%04h expected 0x%04h",
-                       index, acq_cmd_list[index], expected_acq_cmd(index));
+                $fatal(
+                    1,
+                    "acq command %0d got 0x%04h expected 0x%04h",
+                    index,
+                    acq_cmd_list[index],
+                    expected_acq_cmd(
+                        index
+                    )
+                );
 
             for (int sensor = 0; sensor < NUM_INTAN; sensor = sensor + 1) begin
-                if (expect_a[index][sensor] !== expected_init_resp(index))
-                    $fatal(1, "A response command %0d sensor %0d got 0x%04h expected 0x%04h",
-                           index, sensor, expect_a[index][sensor], expected_init_resp(index));
-                if (expect_b[index][sensor] !== expected_init_resp(index))
-                    $fatal(1, "B response command %0d sensor %0d got 0x%04h expected 0x%04h",
-                           index, sensor, expect_b[index][sensor], expected_init_resp(index));
+                if (expect_a[index][sensor] !== expected_init_resp(index, sensor))
+                    $fatal(
+                        1,
+                        "A response command %0d sensor %0d got 0x%04h expected 0x%04h",
+                        index,
+                        sensor,
+                        expect_a[index][sensor],
+                        expected_init_resp(
+                            index, sensor
+                        )
+                    );
+                if (expect_b[index][sensor] !== expected_init_resp(index, sensor))
+                    $fatal(
+                        1,
+                        "B response command %0d sensor %0d got 0x%04h expected 0x%04h",
+                        index,
+                        sensor,
+                        expect_b[index][sensor],
+                        expected_init_resp(
+                            index, sensor
+                        )
+                    );
             end
         end
 
