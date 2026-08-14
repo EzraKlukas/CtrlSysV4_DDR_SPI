@@ -152,10 +152,10 @@ module packet_path_layout_tb;
             fill_icm();
             @(posedge clk);
             intan_done = 1'b1;
-            icm_done = 1'b1;
+            icm_done   = 1'b1;
             @(posedge clk);
             intan_done = 1'b0;
-            icm_done = 1'b0;
+            icm_done   = 1'b0;
         end
     endtask
 
@@ -212,8 +212,7 @@ module packet_path_layout_tb;
     end
 
     initial begin
-        if (INTAN_SENSOR_DATA_BYTES != 128)
-            $fatal(1, "production Intan data must be 128 bytes");
+        if (INTAN_SENSOR_DATA_BYTES != 128) $fatal(1, "production Intan data must be 128 bytes");
         if ($bits(Intan_measurement_t'(0)) / 8 != 129)
             $fatal(1, "production Intan measurement must be 129 bytes");
         if (INTAN_FRAME_BYTES != 1048 || ICM_FRAME_BYTES != 100)
@@ -242,8 +241,7 @@ module packet_path_layout_tb;
             $fatal(1, "expected %0d AXIS beats, got %0d", PACKET_AXIS_WORDS, beat_count);
         if (byte_count != PACKET_BYTES)
             $fatal(1, "expected %0d bytes, got %0d", PACKET_BYTES, byte_count);
-        if (axis_last_count != 1)
-            $fatal(1, "expected one tlast, got %0d", axis_last_count);
+        if (axis_last_count != 1) $fatal(1, "expected one tlast, got %0d", axis_last_count);
         if (fifo_underflow) $fatal(1, "packet FIFO underflowed");
         if (fifo_overflow) $fatal(1, "packet FIFO overflowed");
 
@@ -266,18 +264,24 @@ module packet_path_layout_tb;
             $fatal(1, "bad Intan frame count: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 24));
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 28) != MAX_INTAN_FRAMES_PER_PACKET)
             $fatal(1, "bad maximum Intan frame count");
-        if (be32(PACKET_TRAILER_OFFSET_BYTES + 32) != 1)
-            $fatal(1, "bad ICM frame count");
+        if (be32(PACKET_TRAILER_OFFSET_BYTES + 32) != 1) $fatal(1, "bad ICM frame count");
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 36) != 2096)
             $fatal(1, "bad ICM frame start: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 36));
         if (be32(PACKET_TRAILER_OFFSET_BYTES + 40) != PACKET_TRAILER_OFFSET_BYTES)
             $fatal(1, "bad trailer_start_index: %0d", be32(PACKET_TRAILER_OFFSET_BYTES + 40));
-        if (be32(PACKET_TRAILER_OFFSET_BYTES + 44) != 0 ||
-            be32(PACKET_TRAILER_OFFSET_BYTES + 48) != 0 ||
-            be32(PACKET_TRAILER_OFFSET_BYTES + 52) != 0)
+        if (be32(
+                PACKET_TRAILER_OFFSET_BYTES + 44
+            ) != 0 || be32(
+                PACKET_TRAILER_OFFSET_BYTES + 48
+            ) != 0 || be32(
+                PACKET_TRAILER_OFFSET_BYTES + 52
+            ) != 0)
             $fatal(1, "packet unexpectedly reported dropped frames");
-        if (be32(PACKET_TRAILER_OFFSET_BYTES + 56) != 0 ||
-            be32(PACKET_TRAILER_OFFSET_BYTES + 60) != INTAN_FRAME_BYTES)
+        if (be32(
+                PACKET_TRAILER_OFFSET_BYTES + 56
+            ) != 0 || be32(
+                PACKET_TRAILER_OFFSET_BYTES + 60
+            ) != INTAN_FRAME_BYTES)
             $fatal(1, "bad Intan frame offsets");
 
         $display("PASS packet_path_layout_tb");

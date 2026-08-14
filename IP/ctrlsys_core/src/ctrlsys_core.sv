@@ -1,15 +1,13 @@
 `timescale 1ns / 1ps
 
-import config_pkg::*;
-
 module ctrlsys_core (
     input logic clk,
     input logic rst_n,
 
-    output logic               spi_sclk,
-    output logic               spi_mosi,
-    output logic               spi_cs_n,
-    input  logic [NUM_ICM-1:0] spi_miso,
+    output logic                           spi_sclk,
+    output logic                           spi_mosi,
+    output logic                           spi_cs_n,
+    input  logic [config_pkg::NUM_ICM-1:0] spi_miso,
 
     output logic intan_sclk,
     output logic intan_mosi,
@@ -59,7 +57,7 @@ module ctrlsys_core (
 );
 
     localparam logic [6:0] SPI_REG_ADDR = 7'd45;
-    localparam int MAX_COMMANDS = 34;
+    localparam int MAX_COMMANDS = 64;
     localparam logic [31:0] ERR_FIFO_OVERFLOW = 32'h0000_0001;
     localparam logic [31:0] ERR_FIFO_UNDERFLOW = 32'h0000_0002;
     localparam logic [31:0] ERR_INTAN_INIT = 32'h0000_0004;
@@ -157,9 +155,10 @@ module ctrlsys_core (
     logic [31:0] data_word6;
     logic [31:0] data_word7;
 
-    logic rst_meta;
-    logic rst_sync;
-    always_ff @(posedge clk or negedge rst_n) begin
+    (* ASYNC_REG = "TRUE" *) logic rst_meta;
+    (* ASYNC_REG = "TRUE" *) logic rst_sync;
+
+    always_ff @(posedge clk) begin
         if (!rst_n) begin
             rst_meta <= 1'b1;
             rst_sync <= 1'b1;
@@ -300,7 +299,7 @@ module ctrlsys_core (
     );
 
     intan_reader #(
-        .MAX_COMMANDS(34),
+        .MAX_COMMANDS(MAX_COMMANDS),
         .NUM_INTAN(NUM_INTAN),
         .NUM_CHANNELS_PER_ADC(INTAN_CHANNELS / 2),
         .BITS_PER_WORD(INTAN_BITS_PER_WORD),

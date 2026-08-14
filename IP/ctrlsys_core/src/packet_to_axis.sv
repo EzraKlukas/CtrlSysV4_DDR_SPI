@@ -27,8 +27,7 @@ module packet_to_axis #(
     output logic                    m_axis_tlast
 );
 
-localparam int KEEP_WIDTH = DATA_WIDTH / 8;
-localparam int WORD_INDEX_WIDTH = (PACKET_WORDS > 1) ? $clog2(PACKET_WORDS) : 1;
+localparam int WORD_COUNT_WIDTH = $clog2(PACKET_WORDS + 1);
 
 typedef enum logic [1:0] {
     IDLE,
@@ -38,37 +37,23 @@ typedef enum logic [1:0] {
 } state_t;
 
 state_t state;
-logic [WORD_INDEX_WIDTH-1:0] word_index;
+logic [WORD_COUNT_WIDTH-1:0] remaining_words;
 
 initial begin
     if (DATA_WIDTH < 8 || (DATA_WIDTH % 8) != 0)
         $error("packet_to_axis requires DATA_WIDTH to be a positive byte multiple");
     if (PACKET_WORDS < 1)
         $error("packet_to_axis requires PACKET_WORDS >= 1");
-    if (PACKET_LAST_BYTES < 1 || PACKET_LAST_BYTES > KEEP_WIDTH)
+    if (PACKET_LAST_BYTES != DATA_WIDTH / 8)
+        $error("packet_to_axis currently expects full-width packet words");
+    if (PACKET_LAST_BYTES < 1 || PACKET_LAST_BYTES > DATA_WIDTH / 8)
         $error("packet_to_axis requires 1 <= PACKET_LAST_BYTES <= DATA_WIDTH/8");
 end
-
-function automatic logic [KEEP_WIDTH-1:0] keep_for_word(
-    input logic [WORD_INDEX_WIDTH-1:0] index
-);
-    logic [KEEP_WIDTH-1:0] keep;
-begin
-    keep = '1;
-
-    if (index == WORD_INDEX_WIDTH'(PACKET_WORDS - 1) && PACKET_LAST_BYTES != KEEP_WIDTH) begin
-        keep = '0;
-        keep[PACKET_LAST_BYTES-1:0] = '1;
-    end
-
-    keep_for_word = keep;
-end
-endfunction
 
 always_ff @(posedge clk) begin
     if (rst) begin
         state <= IDLE;
-        word_index <= '0;
+        remaining_words <= '0;
         fifo_rd_en <= 1'b0;
         m_axis_tvalid <= 1'b0;
         m_axis_tdata <= '0;
@@ -84,6 +69,7 @@ always_ff @(posedge clk) begin
                 m_axis_tkeep <= '0;
 
                 if (fifo_packet_available) begin
+                    remaining_words <= WORD_COUNT_WIDTH'(PACKET_WORDS);
                     fifo_rd_en <= 1'b1;
                     state <= WAIT_FOR_READ;
                 end
@@ -95,8 +81,8 @@ always_ff @(posedge clk) begin
 
             CAPTURE_WORD: begin
                 m_axis_tdata <= fifo_rd_data;
-                m_axis_tkeep <= keep_for_word(word_index);
-                m_axis_tlast <= word_index == WORD_INDEX_WIDTH'(PACKET_WORDS - 1);
+                m_axis_tkeep <= '1;
+                m_axis_tlast <= remaining_words == 1;
                 m_axis_tvalid <= 1'b1;
                 state <= SEND_WORD;
             end
@@ -105,11 +91,11 @@ always_ff @(posedge clk) begin
                 if (m_axis_tready) begin
                     m_axis_tvalid <= 1'b0;
 
-                    if (word_index == WORD_INDEX_WIDTH'(PACKET_WORDS - 1)) begin
-                        word_index <= '0;
+                    if (remaining_words == 1) begin
+                        remaining_words <= '0;
                         state <= IDLE;
                     end else begin
-                        word_index <= word_index + 1'b1;
+                        remaining_words <= remaining_words - 1'b1;
                         fifo_rd_en <= 1'b1;
                         state <= WAIT_FOR_READ;
                     end
@@ -118,7 +104,7 @@ always_ff @(posedge clk) begin
 
             default: begin
                 state <= IDLE;
-                word_index <= '0;
+                remaining_words <= '0;
                 fifo_rd_en <= 1'b0;
                 m_axis_tvalid <= 1'b0;
                 m_axis_tlast <= 1'b0;
