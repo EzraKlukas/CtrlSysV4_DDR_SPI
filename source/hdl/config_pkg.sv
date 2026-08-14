@@ -15,19 +15,19 @@ package config_pkg;
     localparam int AXIS_DATA_WIDTH = 64;
     localparam int PACKET_BYTES = 24576;
 
-    localparam int FPGA_CLK_HZ = 125_000_000;
+    localparam int FPGA_CLK_HZ = 50_000_000;
     localparam int ICM_SAMPLE_PERIOD_TICKS_DEFAULT = FPGA_CLK_HZ / 1000;
     localparam int INTAN_SAMPLE_PERIOD_TICKS_DEFAULT =
         ICM_SAMPLE_PERIOD_TICKS_DEFAULT / INTAN_SAMPLING_RATIO;
 
     // Intan SPI timing specifics.  25 half-period clocks at 125 MHz gives
     // SCLK = 125 MHz / (2 * 25) = 2.5 MHz.
-    localparam int INTAN_T_CS_1 = 25;
-    localparam int INTAN_T_CS_2 = 25;
-    localparam int INTAN_T_MOSI = 3;
-    localparam int INTAN_T_MISO = 3;
-    localparam int INTAN_T_CS_OFF = 20;
-    localparam int INTAN_T_SCLK = 25;
+    localparam int INTAN_T_CS_1 = 10;
+    localparam int INTAN_T_CS_2 = 10;
+    localparam int INTAN_T_MOSI = 2;
+    localparam int INTAN_T_MISO = 2;
+    localparam int INTAN_T_CS_OFF = 8;
+    localparam int INTAN_T_SCLK = 10;
 
     // measurement = one sensor's data
     // frame       = all sensors of one type for one read
