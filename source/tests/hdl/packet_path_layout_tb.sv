@@ -129,10 +129,24 @@ module packet_path_layout_tb;
     task automatic pulse_intan(input int frame_id);
         begin
             fill_intan(frame_id);
-            @(posedge clk);
+            @(negedge clk);
             intan_done = 1'b1;
             @(posedge clk);
+            #1;
+            if (!u_writer.accept_intan_frame)
+                $fatal(1, "Intan admission was not registered");
+            if (u_writer.intan_chunks_remaining != 0)
+                $fatal(1, "Intan shift register loaded before registered admission");
+            @(negedge clk);
             intan_done = 1'b0;
+            @(posedge clk);
+            #1;
+            if (u_writer.accept_intan_frame)
+                $fatal(1, "Intan admission event lasted more than one cycle");
+            if (u_writer.intan_chunks_remaining != u_writer.INTAN_FRAME_CHUNKS)
+                $fatal(1, "Intan frame was not captured on the delayed cycle");
+            if (u_writer.intan_shift[7:0] !== intan_frame[INTAN_FRAME_BITS-1-:8])
+                $fatal(1, "Intan frame changed or was captured with the wrong byte order");
         end
     endtask
 
@@ -150,12 +164,22 @@ module packet_path_layout_tb;
         begin
             fill_intan(frame_id);
             fill_icm();
-            @(posedge clk);
+            @(negedge clk);
             intan_done = 1'b1;
             icm_done   = 1'b1;
             @(posedge clk);
+            #1;
+            if (!u_writer.accept_intan_frame)
+                $fatal(1, "simultaneous Intan/ICM admission was not registered");
+            if (!u_writer.pending_icm_valid || !u_writer.packet_closing)
+                $fatal(1, "simultaneous ICM completion was not retained for packet close");
+            @(negedge clk);
             intan_done = 1'b0;
             icm_done   = 1'b0;
+            @(posedge clk);
+            #1;
+            if (u_writer.intan_chunks_remaining != u_writer.INTAN_FRAME_CHUNKS)
+                $fatal(1, "simultaneous Intan frame was not captured after admission");
         end
     endtask
 
@@ -229,7 +253,8 @@ module packet_path_layout_tb;
         repeat (5) @(posedge clk);
 
         pulse_intan(1);
-        repeat (20) @(posedge clk);
+        wait (u_writer.intan_chunks_remaining == 0 && !u_writer.accept_intan_frame);
+        repeat (2) @(posedge clk);
         pulse_intan_and_icm(2);
 
         wait (axis_valid && axis_ready && axis_last);

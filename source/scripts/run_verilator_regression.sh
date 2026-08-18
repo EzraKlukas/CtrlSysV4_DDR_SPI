@@ -67,6 +67,11 @@ run_test packet_path_layout_tb \
     source/hdl/packet_to_axis.sv \
     source/tests/hdl/packet_path_layout_tb.sv
 
+run_test packet_buffer_space_tb \
+    source/hdl/config_pkg.sv \
+    source/hdl/packet_buffer.sv \
+    source/tests/hdl/packet_buffer_space_tb.sv
+
 run_test packet_to_axis_packet_available_tb \
     source/hdl/config_pkg.sv \
     source/hdl/packet_buffer.sv \

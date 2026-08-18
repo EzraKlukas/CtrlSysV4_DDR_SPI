@@ -57,7 +57,7 @@ module ctrlsys_core (
 );
 
     localparam logic [6:0] SPI_REG_ADDR = 7'd45;
-    localparam int MAX_COMMANDS = 64;
+    localparam int MAX_COMMANDS = 34;
     localparam logic [31:0] ERR_FIFO_OVERFLOW = 32'h0000_0001;
     localparam logic [31:0] ERR_FIFO_UNDERFLOW = 32'h0000_0002;
     localparam logic [31:0] ERR_INTAN_INIT = 32'h0000_0004;

@@ -38,9 +38,12 @@ module intan_acq_engine #(
     output logic busy,
     output logic err
 );
-    typedef enum logic [2:0] {
+    typedef enum logic [3:0] {
         ST_PRE_INIT,
         ST_INITING,
+        ST_VERIFY_FETCH,
+        ST_VERIFY_COMPARE,
+        ST_VERIFY_DONE,
         ST_FAULT,
         ST_READ_READY,
         ST_READING,
@@ -49,6 +52,23 @@ module intan_acq_engine #(
 
     intan_frame_state_t intan_state;
     localparam int CHANNEL_B_OFFSET = config_pkg::INTAN_CHANNELS / 2;
+    localparam int VERIFY_COMMAND_INDEX_WIDTH =
+        (MAX_COMMANDS > 1) ? $clog2(MAX_COMMANDS + 1) : 1;
+    localparam int VERIFY_COMMAND_ADDRESS_WIDTH =
+        (MAX_COMMANDS > 1) ? $clog2(MAX_COMMANDS) : 1;
+    localparam int VERIFY_SENSOR_INDEX_WIDTH =
+        (NUM_INTAN > 1) ? $clog2(NUM_INTAN + 1) : 1;
+    localparam int VERIFY_SENSOR_ADDRESS_WIDTH =
+        (NUM_INTAN > 1) ? $clog2(NUM_INTAN) : 1;
+    localparam logic [NUM_INTAN-1:0] INTAN_MASK = config_pkg::INTAN_MASK;
+
+    logic [VERIFY_COMMAND_INDEX_WIDTH-1:0] verify_command_index;
+    logic [VERIFY_SENSOR_INDEX_WIDTH-1:0] verify_sensor_index;
+    logic [BITS_PER_WORD-1:0] verify_actual_a;
+    logic [BITS_PER_WORD-1:0] verify_actual_b;
+    logic [BITS_PER_WORD-1:0] verify_expected_a;
+    logic [BITS_PER_WORD-1:0] verify_expected_b;
+    logic verify_mismatch;
 
     initial begin
         if (NUM_CHAN > CHANNEL_B_OFFSET)
@@ -70,6 +90,13 @@ module intan_acq_engine #(
             cmd_list_len <= '0;
             tx_cmd_list <= '0;
             start_seq_pulse <= 1'b0;
+            verify_command_index <= '0;
+            verify_sensor_index <= '0;
+            verify_actual_a <= '0;
+            verify_actual_b <= '0;
+            verify_expected_a <= '0;
+            verify_expected_b <= '0;
+            verify_mismatch <= 1'b0;
             Intan_frame.init_read_ts <= 64'b0;
             Intan_frame.done_read_ts <= 64'b0;
             for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
@@ -94,24 +121,72 @@ module intan_acq_engine #(
                         start_seq_pulse <= 1'b1;
                         err <= 1'b0;
                         initialized <= 1'b0;
+                        verify_mismatch <= 1'b0;
                     end
                 end
                 ST_INITING: begin
                     busy <= 1'b1;
 
                     if (done_seq_pulse) begin
-                        if (rx_ans_list_a == expect_rx_ans_list_a && rx_ans_list_b == expect_rx_ans_list_b) begin
-                            intan_state <= ST_READ_READY;
-                            init_done_pulse <= 1'b1;
-                            initialized <= 1'b1;
-                            busy <= 1'b0;
-                        end else begin
-                            intan_state <= ST_FAULT;
-                            err <= 1'b1;
-                            initialized <= 1'b0;
-                            busy <= 1'b0;
-                        end
+                        verify_command_index <= '0;
+                        verify_sensor_index <= '0;
+                        verify_mismatch <= 1'b0;
+                        intan_state <= ST_VERIFY_FETCH;
                     end
+                end
+                ST_VERIFY_FETCH: begin
+                    busy <= 1'b1;
+
+                    if (verify_command_index >= VERIFY_COMMAND_INDEX_WIDTH'(MAX_COMMANDS) ||
+                        verify_command_index >= init_list_len) begin
+                        intan_state <= ST_VERIFY_DONE;
+                    end else if (verify_sensor_index >=
+                                 VERIFY_SENSOR_INDEX_WIDTH'(NUM_INTAN)) begin
+                        verify_command_index <= verify_command_index + 1'b1;
+                        verify_sensor_index <= '0;
+                    end else if (!INTAN_MASK[
+                                     verify_sensor_index[VERIFY_SENSOR_ADDRESS_WIDTH-1:0]
+                                 ]) begin
+                        verify_sensor_index <= verify_sensor_index + 1'b1;
+                    end else begin
+                        verify_actual_a <=
+                            rx_ans_list_a[
+                                verify_command_index[VERIFY_COMMAND_ADDRESS_WIDTH-1:0]
+                            ][verify_sensor_index[VERIFY_SENSOR_ADDRESS_WIDTH-1:0]];
+                        verify_actual_b <=
+                            rx_ans_list_b[
+                                verify_command_index[VERIFY_COMMAND_ADDRESS_WIDTH-1:0]
+                            ][verify_sensor_index[VERIFY_SENSOR_ADDRESS_WIDTH-1:0]];
+                        verify_expected_a <=
+                            expect_rx_ans_list_a[
+                                verify_command_index[VERIFY_COMMAND_ADDRESS_WIDTH-1:0]
+                            ][verify_sensor_index[VERIFY_SENSOR_ADDRESS_WIDTH-1:0]];
+                        verify_expected_b <=
+                            expect_rx_ans_list_b[
+                                verify_command_index[VERIFY_COMMAND_ADDRESS_WIDTH-1:0]
+                            ][verify_sensor_index[VERIFY_SENSOR_ADDRESS_WIDTH-1:0]];
+                        intan_state <= ST_VERIFY_COMPARE;
+                    end
+                end
+                ST_VERIFY_COMPARE: begin
+                    busy <= 1'b1;
+                    verify_mismatch <= verify_mismatch ||
+                        verify_actual_a != verify_expected_a ||
+                        verify_actual_b != verify_expected_b;
+                    verify_sensor_index <= verify_sensor_index + 1'b1;
+                    intan_state <= ST_VERIFY_FETCH;
+                end
+                ST_VERIFY_DONE: begin
+                    if (verify_mismatch) begin
+                        intan_state <= ST_FAULT;
+                        err <= 1'b1;
+                        initialized <= 1'b0;
+                    end else begin
+                        intan_state <= ST_READ_READY;
+                        init_done_pulse <= 1'b1;
+                        initialized <= 1'b1;
+                    end
+                    busy <= 1'b0;
                 end
                 ST_READ_READY: begin
                     initialized <= 1'b1;
@@ -125,6 +200,7 @@ module intan_acq_engine #(
                         start_seq_pulse <= 1'b1;
                         err <= 1'b0;
                         initialized <= 1'b0;
+                        verify_mismatch <= 1'b0;
                     end else if (start_read) begin
                         intan_state <= ST_READING;
                         busy <= 1'b1;
@@ -154,9 +230,20 @@ module intan_acq_engine #(
                             sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1
                         ) begin
                             // sensor_id already filled out in previous state.
-                            for (chan_idx = 0; chan_idx < NUM_CHAN; chan_idx = chan_idx + 1) begin
-                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*chan_idx+:BITS_PER_WORD] <= rx_ans_list_a[chan_idx][sensor_idx];
-                                Intan_frame.Intan_data[sensor_idx].data[BITS_PER_WORD*(chan_idx+CHANNEL_B_OFFSET)+:BITS_PER_WORD] <= rx_ans_list_b[chan_idx][sensor_idx];
+                            if (INTAN_MASK[sensor_idx]) begin
+                                for (
+                                    chan_idx = 0; chan_idx < NUM_CHAN;
+                                    chan_idx = chan_idx + 1
+                                ) begin
+                                    Intan_frame.Intan_data[sensor_idx].data[
+                                        BITS_PER_WORD*chan_idx+:BITS_PER_WORD
+                                    ] <= rx_ans_list_a[chan_idx][sensor_idx];
+                                    Intan_frame.Intan_data[sensor_idx].data[
+                                        BITS_PER_WORD*(chan_idx+CHANNEL_B_OFFSET)+:BITS_PER_WORD
+                                    ] <= rx_ans_list_b[chan_idx][sensor_idx];
+                                end
+                            end else begin
+                                Intan_frame.Intan_data[sensor_idx].data <= '0;
                             end
                         end
                     end
@@ -177,6 +264,7 @@ module intan_acq_engine #(
                         tx_cmd_list <= init_cmd_list;
                         start_seq_pulse <= 1'b1;
                         err <= 1'b0;
+                        verify_mismatch <= 1'b0;
                     end
                 end
                 default: begin

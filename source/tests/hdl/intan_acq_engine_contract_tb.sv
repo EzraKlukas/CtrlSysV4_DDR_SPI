@@ -84,13 +84,50 @@ module intan_acq_engine_contract_tb;
         end
     endtask
 
+    task automatic start_init_attempt();
+        begin
+            start_init = 1'b1;
+            step();
+            start_init = 1'b0;
+            if (!start_seq_pulse || !busy || err || initialized)
+                fail("initialization attempt did not start cleanly");
+        end
+    endtask
+
+    task automatic finish_init_attempt(input bit expect_success, input string name);
+        int waited;
+        begin
+            pulse_done();
+            if (!busy || init_done_pulse || err)
+                fail({name, ": verification completed on the sequence-done cycle"});
+
+            waited = 0;
+            while (!init_done_pulse && !err && waited < 4 * MAX_COMMANDS * NUM_INTAN + 16) begin
+                if (!busy) fail({name, ": busy cleared before verification completed"});
+                step();
+                waited = waited + 1;
+            end
+
+            if (expect_success) begin
+                if (!init_done_pulse || !initialized || err || busy)
+                    fail({name, ": expected successful multi-cycle verification"});
+            end else begin
+                if (!err || initialized || init_done_pulse || busy)
+                    fail({name, ": expected failed multi-cycle verification"});
+            end
+        end
+    endtask
+
     initial begin
-        init_cmd_list[0] = 16'hFF00;
+        for (int command_index = 0; command_index < MAX_COMMANDS; command_index++) begin
+            init_cmd_list[command_index] = 16'hFF00 + command_index;
+            expect_a[command_index][0] = 16'h1100 + command_index;
+            expect_a[command_index][1] = 16'h2200 + command_index;
+            expect_b[command_index][0] = 16'h3300 + command_index;
+            expect_b[command_index][1] = 16'h4400 + command_index;
+        end
+        init_list_len = MAX_COMMANDS;
         acq_cmd_list[0]  = 16'h0000;
-        expect_a[0][0]   = 16'h1111;
-        expect_a[0][1]   = 16'h2222;
-        expect_b[0][0]   = 16'h3333;
-        expect_b[0][1]   = 16'h4444;
 
         repeat (3) step();
         rst = 1'b0;
@@ -103,27 +140,29 @@ module intan_acq_engine_contract_tb;
         start_read = 1'b0;
         if (start_seq_pulse || frame_done_pulse) fail("read before init started a sequence");
 
-        start_init = 1'b1;
-        step();
-        start_init = 1'b0;
-        if (!start_seq_pulse || !busy) fail("init did not start");
-
-        rx_a = '0;
-        rx_b = '0;
-        pulse_done();
-        if (!err || initialized || init_done_pulse || frame_done_pulse)
-            fail("bad init response did not fault cleanly");
-
-        start_init = 1'b1;
-        step();
-        start_init = 1'b0;
-        if (!start_seq_pulse || err || initialized) fail("retry did not clear init error/state");
+        rx_a = expect_a;
+        rx_b = expect_b;
+        rx_a[0][0] ^= 16'h0001;
+        start_init_attempt();
+        finish_init_attempt(1'b0, "first active response mismatch");
 
         rx_a = expect_a;
         rx_b = expect_b;
-        pulse_done();
-        if (!init_done_pulse || !initialized || err || busy)
-            fail("successful init did not assert only init_done");
+        rx_b[MAX_COMMANDS-1][0] ^= 16'h0001;
+        start_init_attempt();
+        finish_init_attempt(1'b0, "final active response mismatch");
+
+        // Disabled sensors are neither verified nor exposed as acquired data.
+        if (config_pkg::INTAN_MASK[1] !== 1'b0)
+            fail("contract test requires sensor one to be inactive");
+        rx_a = expect_a;
+        rx_b = expect_b;
+        for (int command_index = 0; command_index < MAX_COMMANDS; command_index++) begin
+            rx_a[command_index][1] ^= 16'h00ff;
+            rx_b[command_index][1] ^= 16'hff00;
+        end
+        start_init_attempt();
+        finish_init_attempt(1'b1, "inactive responses ignored on retry");
         step();
         if (init_done_pulse) fail("init_done_pulse lasted more than one clock");
 
@@ -145,10 +184,10 @@ module intan_acq_engine_contract_tb;
         step();
         if (!frame_done_pulse || !initialized || err) fail("read did not produce frame pulse");
         if (frame.Intan_data[0].data[15:0] !== 16'h1000 ||
-            frame.Intan_data[0].data[16*32+:16] !== 16'h1020 ||
-            frame.Intan_data[1].data[15:0] !== 16'h1100 ||
-            frame.Intan_data[1].data[16*32+:16] !== 16'h1120)
-            fail("A/B response channels were not packed with sensor index");
+            frame.Intan_data[0].data[16*32+:16] !== 16'h1020)
+            fail("active A/B response channels were not packed");
+        if (frame.Intan_data[1].data !== '0)
+            fail("inactive sensor acquisition data was not held at zero");
         step();
         if (frame_done_pulse) fail("frame_done_pulse lasted more than one clock");
 

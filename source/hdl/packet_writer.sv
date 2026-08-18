@@ -74,6 +74,7 @@ logic packet_active;
 logic packet_closing;
 logic pending_intan_valid;
 logic pending_icm_valid;
+logic accept_intan_frame;
 
 logic [INTAN_FRAME_BITS-1:0] intan_shift;
 logic [INTAN_FRAME_BITS-1:0] pending_intan_frame;
@@ -209,7 +210,7 @@ end
 endfunction
 
 assign ready =
-    !rst && !pending_intan_valid && !packet_closing &&
+    !rst && !accept_intan_frame && !pending_intan_valid && !packet_closing &&
     packet_intan_frames < INTAN_COUNT_WIDTH'(MAX_INTAN_FRAMES) &&
     (packet_active || packet_ready);
 
@@ -223,6 +224,7 @@ always_ff @(posedge clk) begin
         packet_closing <= 1'b0;
         pending_intan_valid <= 1'b0;
         pending_icm_valid <= 1'b0;
+        accept_intan_frame <= 1'b0;
         intan_shift <= '0;
         pending_intan_frame <= '0;
         icm_shift <= '0;
@@ -244,6 +246,7 @@ always_ff @(posedge clk) begin
         packet_done <= 1'b0;
     end else begin
         packet_done <= 1'b0;
+        accept_intan_frame <= 1'b0;
 
         if (word_valid && word_ready) begin
             word_valid <= 1'b0;
@@ -272,25 +275,45 @@ always_ff @(posedge clk) begin
         end else begin
             case (state)
                 WAIT_INPUT: begin
-                    if (!packet_active) begin
+                    // Intan_frame_in is owned by the acquisition engine and
+                    // remains stable until its next frame_done pulse.  Admission
+                    // is registered first so only this event, never FIFO-space
+                    // combinational logic, enables the wide shift-register load.
+                    if (accept_intan_frame) begin
+                        intan_shift <= intan_to_stream_order(Intan_frame_in);
+                        intan_chunks_remaining <=
+                            INTAN_CHUNK_COUNT_WIDTH'(INTAN_FRAME_CHUNKS);
+                        state <= STREAM_INTAN;
+
+                        // A second completion in this one-cycle capture window
+                        // cannot replace the admitted frame.
+                        if (Intan_frame_done)
+                            dropped_intan_frames <= dropped_intan_frames + 1'b1;
+                        if (ICM_frame_done) begin
+                            if (!pending_icm_valid) begin
+                                pending_icm_frame <= icm_to_stream_order(ICM_frame_in);
+                                pending_icm_valid <= 1'b1;
+                                packet_closing <= 1'b1;
+                            end else begin
+                                dropped_icm_frames <= dropped_icm_frames + 1'b1;
+                            end
+                        end
+                    end else if (!packet_active) begin
                         if (Intan_frame_done && packet_ready) begin
+                            accept_intan_frame <= 1'b1;
                             packet_active <= 1'b1;
                             packet_intan_frames <= INTAN_COUNT_WIDTH'(1);
                             packet_word_index <= '0;
                             chunk_count <= '0;
                             word_assembly <= '0;
-                            intan_shift <= intan_to_stream_order(Intan_frame_in);
-                            intan_chunks_remaining <=
-                                INTAN_CHUNK_COUNT_WIDTH'(INTAN_FRAME_CHUNKS);
 
                             // When both frame types complete together, retain
-                            // the ICM frame while the Intan frame is streamed.
+                            // the ICM frame during delayed Intan capture/streaming.
                             if (ICM_frame_done) begin
                                 pending_icm_frame <= icm_to_stream_order(ICM_frame_in);
                                 pending_icm_valid <= 1'b1;
                                 packet_closing <= 1'b1;
                             end
-                            state <= STREAM_INTAN;
                         end else if (ICM_frame_done && packet_ready) begin
                             packet_active <= 1'b1;
                             packet_closing <= 1'b1;
@@ -353,9 +376,7 @@ always_ff @(posedge clk) begin
                         end else if (Intan_frame_done && !packet_closing &&
                                      packet_intan_frames <
                                          INTAN_COUNT_WIDTH'(MAX_INTAN_FRAMES)) begin
-                            intan_shift <= intan_to_stream_order(Intan_frame_in);
-                            intan_chunks_remaining <=
-                                INTAN_CHUNK_COUNT_WIDTH'(INTAN_FRAME_CHUNKS);
+                            accept_intan_frame <= 1'b1;
                             packet_intan_frames <= packet_intan_frames + 1'b1;
 
                             if (ICM_frame_done) begin
@@ -369,7 +390,6 @@ always_ff @(posedge clk) begin
                                         dropped_icm_frames + 1'b1;
                                 end
                             end
-                            state <= STREAM_INTAN;
                         end else if (pending_icm_valid) begin
                             icm_shift <= pending_icm_frame;
                             icm_chunks_remaining <=

@@ -446,7 +446,7 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>viewChecksum</spirit:name>
-            <spirit:value>31f48abc</spirit:value>
+            <spirit:value>4bdba321</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -462,7 +462,7 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>viewChecksum</spirit:name>
-            <spirit:value>31f48abc</spirit:value>
+            <spirit:value>4bdba321</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -1411,13 +1411,13 @@
       <xilinx:displayName>CtrlSysV4 Control System Core</xilinx:displayName>
       <xilinx:definitionSource>package_project</xilinx:definitionSource>
       <xilinx:coreRevision>1</xilinx:coreRevision>
-      <xilinx:coreCreationDateTime>2026-08-17T23:51:48Z</xilinx:coreCreationDateTime>
+      <xilinx:coreCreationDateTime>2026-08-18T02:11:37Z</xilinx:coreCreationDateTime>
     </xilinx:coreExtensions>
     <xilinx:packagingInfo>
       <xilinx:xilinxVersion>2026.1</xilinx:xilinxVersion>
       <xilinx:checksum xilinx:scope="busInterfaces" xilinx:value="d895b2b1"/>
       <xilinx:checksum xilinx:scope="memoryMaps" xilinx:value="e158a12f"/>
-      <xilinx:checksum xilinx:scope="fileGroups" xilinx:value="7c4bd7d7"/>
+      <xilinx:checksum xilinx:scope="fileGroups" xilinx:value="09927316"/>
       <xilinx:checksum xilinx:scope="ports" xilinx:value="8d325f0c"/>
       <xilinx:checksum xilinx:scope="parameters" xilinx:value="018819f9"/>
     </xilinx:packagingInfo>

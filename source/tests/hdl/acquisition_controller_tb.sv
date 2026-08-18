@@ -75,16 +75,14 @@ module acquisition_controller_tb;
         if (!startRead_ICM || !startRead_Intan)
             fail("initialization completion while enable high did not start acquisition");
 
-        begin : wait_for_intan_period
-            int waited = 0;
-            step();
-            while (!startRead_Intan && waited < 8) begin
-                if (startRead_ICM) fail("ICM fired at the Intan-only deadline");
-                waited = waited + 1;
+        begin : check_exact_independent_cadence
+            for (int offset = 1; offset <= 8; offset++) begin
                 step();
+                if (startRead_Intan !== (offset % 4 == 0))
+                    fail($sformatf("Intan cadence mismatch at offset %0d", offset));
+                if (startRead_ICM !== (offset % 8 == 0))
+                    fail($sformatf("ICM cadence mismatch at offset %0d", offset));
             end
-            if (!startRead_Intan || startRead_ICM)
-                fail("Intan period did not fire independently");
         end
 
         intan_busy = 1'b1;
@@ -98,7 +96,8 @@ module acquisition_controller_tb;
                 waited = waited + 1;
             end
         end
-        if (missedRead_Intan_count == 0) fail("busy Intan deadline miss was not counted");
+        if (missedRead_Intan_count != 1)
+            fail("busy Intan deadline did not increment its missed count exactly once");
         if (startRead_Intan) fail("Intan read was issued while busy");
 
         intan_busy = 1'b0;
@@ -116,7 +115,8 @@ module acquisition_controller_tb;
                 waited = waited + 1;
             end
         end
-        if (missedRead_ICM_count == 0) fail("busy ICM deadline miss was not counted");
+        if (missedRead_ICM_count != 1)
+            fail("busy ICM deadline did not increment its missed count exactly once");
         if (startRead_ICM) fail("ICM read was issued while busy");
 
         icm_busy = 1'b0;
@@ -139,6 +139,20 @@ module acquisition_controller_tb;
         end
         step();
         if (startRead_Intan) fail("late idle deadline caused a catch-up burst");
+
+        enable = 1'b0;
+        step();
+        sample_period_ICM = 64'd0;
+        sample_period_Intan = 64'd0;
+        enable = 1'b1;
+        step();
+        if (!startRead_ICM || !startRead_Intan)
+            fail("zero-period re-enable did not issue the required immediate reads");
+        repeat (12) begin
+            step();
+            if (startRead_ICM || startRead_Intan)
+                fail("zero sample period issued a periodic read");
+        end
 
         enable = 1'b0;
         repeat (3) step();

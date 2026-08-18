@@ -49,30 +49,43 @@ end
 logic [PTR_WIDTH-1:0] wptr;
 logic [PTR_WIDTH-1:0] rptr;
 logic [COUNT_WIDTH-1:0] count;
-logic [COUNT_WIDTH-1:0] free_words;
+logic [COUNT_WIDTH-1:0] count_next;
 
 wire do_write;
 wire do_read;
 
 assign empty = count == 0;
-assign full = count == COUNT_WIDTH'(DEPTH_WORDS);
-assign free_words = COUNT_WIDTH'(DEPTH_WORDS) - count;
-assign packet_space = free_words >= COUNT_WIDTH'(PACKET_WORDS);
 assign packet_available = count >= COUNT_WIDTH'(PACKET_WORDS);
 assign do_write = wr_en && !full;
 assign do_read = rd_en && !empty;
+
+always_comb begin
+    count_next = count;
+    case ({do_write, do_read})
+        2'b10: count_next = count + 1'b1;
+        2'b01: count_next = count - 1'b1;
+        default: count_next = count;
+    endcase
+end
 
 always_ff @(posedge clk) begin
     if (rst) begin
         wptr <= '0;
         rptr <= '0;
         count <= '0;
+        full <= 1'b0;
+        packet_space <= DEPTH_WORDS >= PACKET_WORDS;
         rd_data <= '0;
         overflow <= 1'b0;
         underflow <= 1'b0;
     end else begin
         overflow <= wr_en && !do_write;
         underflow <= rd_en && !do_read;
+        // Register the post-transaction capacity.  A writer may therefore
+        // reserve a packet only from a full-cycle-stable availability value.
+        packet_space <=
+            COUNT_WIDTH'(DEPTH_WORDS) - count_next >= COUNT_WIDTH'(PACKET_WORDS);
+        full <= count_next == COUNT_WIDTH'(DEPTH_WORDS);
 
         if (do_write) begin
             mem[wptr] <= wr_data;
@@ -92,11 +105,7 @@ always_ff @(posedge clk) begin
                 rptr <= rptr + 1'b1;
         end
 
-        case ({do_write, do_read})
-            2'b10: count <= count + 1'b1;
-            2'b01: count <= count - 1'b1;
-            default: count <= count;
-        endcase
+        count <= count_next;
     end
 end
 

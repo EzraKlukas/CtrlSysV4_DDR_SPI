@@ -4,7 +4,7 @@ package config_pkg;
 
     localparam int NUM_ICM = 4;
     localparam int NUM_INTAN = 8;
-    localparam logic [NUM_INTAN-1:0] INTAN_MASK = 8'b1111_1111;
+    localparam logic [NUM_INTAN-1:0] INTAN_MASK = 8'b0000_0001;
     localparam int ICM_DATA_BYTES = 20;
     localparam int INTAN_SAMPLING_RATIO = 2;
     localparam int INTAN_BITS_PER_WORD = 16;
