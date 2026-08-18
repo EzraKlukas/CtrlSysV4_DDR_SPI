@@ -19,6 +19,8 @@ module intan_program #(
         if (BITS_PER_WORD != 16) $error("intan_program requires 16-bit Intan words");
     end
 
+    localparam INTAN_MASK = config_pkg::INTAN_MASK;
+
     function automatic logic [15:0] init_command(input int index);
         begin
             unique case (index)
@@ -133,10 +135,10 @@ module intan_program #(
             init_cmd_list[command_idx] = BITS_PER_WORD'(init_command(command_idx));
             acq_cmd_list[command_idx]  = BITS_PER_WORD'(acq_command(command_idx));
             for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                expect_rx_ans_list_a[command_idx][sensor_idx] =
-                    BITS_PER_WORD'(init_response(command_idx));
-                expect_rx_ans_list_b[command_idx][sensor_idx] =
-                    BITS_PER_WORD'(init_response(command_idx));
+                expect_rx_ans_list_a[command_idx][sensor_idx] = INTAN_MASK[sensor_idx] ? 
+                    BITS_PER_WORD'(init_response(command_idx)) : '0;
+                expect_rx_ans_list_b[command_idx][sensor_idx] = INTAN_MASK[sensor_idx] ?
+                    BITS_PER_WORD'(init_response(command_idx)) : '0;
             end
         end
     end

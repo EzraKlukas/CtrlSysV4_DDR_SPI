@@ -55,8 +55,6 @@ module intan_spi_word_engine #(
 
     assign transaction_done = (curr_state == ST_CS_DEASSERT_SETUP) && (state_cycles_q == 16'(T_CS_2));
 
-    assign done_pulse = transaction_done;
-
     // data
     logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] curr_rx_word_a;
     logic [NUM_INTAN-1:0][BITS_PER_WORD-1:0] curr_rx_word_b;
@@ -79,6 +77,8 @@ module intan_spi_word_engine #(
     logic sclk_fall_stb;
     logic sclk_has_pulsed_q;
     logic sclk_has_pulsed_d;
+    logic capture_final_b_q;
+    logic capture_final_b_d;
     logic [3:0] sclk_cnt_q;
     logic [3:0] sclk_cnt_d;
 
@@ -164,6 +164,9 @@ module intan_spi_word_engine #(
             sclk_en_q <= 1'b0;
             cs_n_q <= 1'b1;
             mosi_q <= 1'b0;
+
+            capture_final_b_q <= 1'b0;
+            done_pulse <= 1'b0;
         end else begin
             curr_state <= next_state;
             curr_rx_word_a <= next_rx_word_a;
@@ -172,6 +175,10 @@ module intan_spi_word_engine #(
             sclk_en_q <= sclk_en_d;
             cs_n_q <= cs_n_d;
             mosi_q <= mosi_d;
+
+            capture_final_b_q <= capture_final_b_d;
+            done_pulse <= (curr_state == ST_CS_DEASSERT_SETUP) &&
+            (state_cycles_q == 16'(T_CS_2 - 1));
 
             if (curr_state != next_state) begin
                 state_cycles_q <= 16'b0;
@@ -190,6 +197,7 @@ module intan_spi_word_engine #(
         cs_n_d = cs_n_q;
         mosi_d = mosi_q;
         sclk_en_d = sclk_en_q;
+        capture_final_b_d = capture_final_b_q;
 
         case (curr_state)
             ST_IDLE: begin
@@ -244,9 +252,13 @@ module intan_spi_word_engine #(
                 // edge.  Register it one fabric clock before done_pulse so the
                 // sequencer always consumes the completed word, including when
                 // T_CS_2 equals one SCLK half-period.
-                if (state_cycles_q == 16'(T_CS_2 - 1)) begin
+                if (state_cycles_q == 16'(T_CS_2 - 2)) begin
+                    capture_final_b_d = 1'b1;
+                end
+                if (capture_final_b_q) begin
+                    capture_final_b_d = 1'b0;  // so it's not sticky, next cycle q goes low.
                     for (sensor_idx = 0; sensor_idx < NUM_INTAN; sensor_idx = sensor_idx + 1) begin
-                        next_rx_word_b[sensor_idx][sclk_cnt_q] = miso[sensor_idx];
+                        next_rx_word_b[sensor_idx][0] = miso[sensor_idx];
                     end
                 end
 

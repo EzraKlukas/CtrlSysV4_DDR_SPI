@@ -145,7 +145,7 @@ module intan_acq_engine #(
                 ST_READING: begin
                     busy <= 1'b1;
 
-                    if (done_seq_pulse) begin
+                    if (done_seq_pulse) begin  // this might be too much?
                         intan_state <= ST_DONE;
                         Intan_frame.done_read_ts <= timestamp;
 

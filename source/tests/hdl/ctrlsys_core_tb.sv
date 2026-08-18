@@ -3,7 +3,7 @@
 module ctrlsys_core_tb;
     timeunit 1ns; timeprecision 1ps;
 
-    localparam time CLK_PERIOD = 20ns;
+    localparam time CLK_PERIOD = 8ns;
     localparam logic [31:0] STATUS_ERROR = 32'h0000_0002;
     localparam logic [31:0] STATUS_PACKET_DONE = 32'h0000_0008;
     localparam logic [31:0] STATUS_INTAN_INITIALIZED = 32'h0000_0100;

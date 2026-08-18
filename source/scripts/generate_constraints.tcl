@@ -1,21 +1,20 @@
 # Generate and add project-level constraints for ctrlsys_core.
 # This script locates paths relative to itself, so it does not depend on Vivado's cwd.
-
 set script_dir [file normalize [file dirname [info script]]]
 set source_dir [file normalize [file join $script_dir ".."]]
-set repo_root  [file normalize [file join $source_dir ".."]]
+set repo_root [file normalize [file join $source_dir ".."]]
 set config_path [file normalize [file join $source_dir "config" "system_config.json"]]
-set xdc_dir    [file normalize [file join $repo_root "source" "constraints"]]
-set xdc_path   [file normalize [file join $xdc_dir "ctrlsys_core_generated.xdc"]]
+set xdc_dir [file normalize [file join $repo_root "source" "constraints"]]
+set xdc_path [file normalize [file join $xdc_dir "ctrlsys_core_generated.xdc"]]
 
-proc read_text_file { path } {
+proc read_text_file {path} {
     set fp [open $path "r"]
     set text [read $fp]
     close $fp
     return $text
 }
 
-proc json_get_int { json_text key default_value } {
+proc json_get_int {json_text key default_value} {
     set pattern [format {\"%s\"\s*:\s*([0-9]+)} $key]
     if {[regexp $pattern $json_text -> value]} {
         return $value
@@ -23,7 +22,7 @@ proc json_get_int { json_text key default_value } {
     return $default_value
 }
 
-proc json_get_string { json_text key default_value } {
+proc json_get_string {json_text key default_value} {
     set pattern [format {\"%s\"\s*:\s*\"([^\"]*)\"} $key]
     if {[regexp $pattern $json_text -> value]} {
         return $value
@@ -31,7 +30,7 @@ proc json_get_string { json_text key default_value } {
     return $default_value
 }
 
-proc detect_bus_port_base { candidates default_base } {
+proc detect_bus_port_base {candidates default_base} {
     foreach base $candidates {
         if {[llength [get_ports -quiet "${base}\[*\]"]] > 0} {
             return $base
