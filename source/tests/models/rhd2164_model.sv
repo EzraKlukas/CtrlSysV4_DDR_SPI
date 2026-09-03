@@ -5,16 +5,17 @@
  *   - receives one 16-bit MOSI command, MSB first;
  *   - returns the RHD2164's interleaved A/B DDR MISO streams;
  *   - includes the real two-command response pipeline;
- *   - implements deterministic CONVERT data and basic READ/WRITE behavior;
+ *   - implements deterministic CONVERT data, READ/WRITE behavior, and the
+ *     nine ignored commands required after CALIBRATE;
  *   - exposes the most recently captured command to a testbench.
  *
  * Deliberate simplifications:
- *   - no analog behavior, noise, filters, saturation, or calibration time;
+ *   - no analog behavior, noise, filters, saturation, or analog calibration;
  *   - writable registers start at zero rather than an indeterminate value;
  *   - non-amplifier ADC channels return deterministic placeholder values;
  *   - register reads are deterministic on both streams even where the
  *     datasheet says that one stream is not meaningful;
- *   - invalid-command and calibration responses are zero.
+ *   - invalid-command behavior is simplified.
  *
  * This is behavioral testbench code.  Do not add it to synthesis sources.
  */
@@ -69,6 +70,7 @@ module rhd2164_model #(
     integer rising_edge_count;
     integer falling_edge_count;
     integer register_index;
+    integer calibration_commands_remaining;
 
     realtime last_cs_fall;
     realtime last_cs_rise;
@@ -134,6 +136,12 @@ module rhd2164_model #(
         end
     endfunction
 
+    function automatic logic [15:0] calibration_response(input logic twoscomp);
+        // During calibration, only the MSB can be nonzero.  It is zero in
+        // two's-complement mode and one in offset-binary mode.
+        calibration_response = twoscomp ? 16'h0000 : 16'h8000;
+    endfunction
+
     initial begin
         command_shift = '0;
         captured_command = '0;
@@ -148,6 +156,7 @@ module rhd2164_model #(
 
         rising_edge_count = 0;
         falling_edge_count = 0;
+        calibration_commands_remaining = 0;
         last_cs_fall = 0.0;
         last_cs_rise = 0.0;
         last_sclk_rise = 0.0;
@@ -282,14 +291,27 @@ module rhd2164_model #(
 
             response_pipe_a_1 = response_pipe_a_0;
             response_pipe_b_1 = response_pipe_b_0;
-            response_pipe_a_0 = response_for_a(command_shift);
-            response_pipe_b_0 = response_for_b(command_shift);
 
-            if (command_shift[15:14] == 2'b10) begin
-                // Registers 0-21 are writable on the RHD2164.
-                if (command_shift[13:8] <= 6'd21) begin
-                    register_a[command_shift[13:8]] = command_shift[7:0];
-                    register_b[command_shift[13:8]] = command_shift[7:0];
+            if (calibration_commands_remaining > 0) begin
+                // The nine commands after CALIBRATE provide clocks but are
+                // otherwise ignored by the chip.
+                response_pipe_a_0 = calibration_response(register_a[4][6]);
+                response_pipe_b_0 = calibration_response(register_b[4][6]);
+                calibration_commands_remaining = calibration_commands_remaining - 1;
+            end else if (command_shift == 16'h5500) begin
+                response_pipe_a_0 = calibration_response(register_a[4][6]);
+                response_pipe_b_0 = calibration_response(register_b[4][6]);
+                calibration_commands_remaining = 9;
+            end else begin
+                response_pipe_a_0 = response_for_a(command_shift);
+                response_pipe_b_0 = response_for_b(command_shift);
+
+                if (command_shift[15:14] == 2'b10) begin
+                    // Registers 0-21 are writable on the RHD2164.
+                    if (command_shift[13:8] <= 6'd21) begin
+                        register_a[command_shift[13:8]] = command_shift[7:0];
+                        register_b[command_shift[13:8]] = command_shift[7:0];
+                    end
                 end
             end
 

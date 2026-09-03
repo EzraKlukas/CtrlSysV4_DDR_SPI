@@ -24,31 +24,37 @@ module intan_program #(
     function automatic logic [15:0] init_command(input int index);
         begin
             unique case (index)
-                0, 1, 2, 3, 4, 5, 6, 7, 8: init_command = 16'hFF00;
-                9: init_command = 16'h5500;
-                10: init_command = 16'h95FF;
-                11: init_command = 16'h94FF;
-                12: init_command = 16'h93FF;
-                13: init_command = 16'h92FF;
-                14: init_command = 16'h91FF;
-                15: init_command = 16'h90FF;
-                16: init_command = 16'h8FFF;
-                17: init_command = 16'h8EFF;
-                18: init_command = 16'h8D86;
-                19: init_command = 16'h8C2C;
-                20: init_command = 16'h8B80;
-                21: init_command = 16'h8A17;
-                22: init_command = 16'h8980;
-                23: init_command = 16'h8816;
-                24: init_command = 16'h8700;
-                25: init_command = 16'h8680;
-                26: init_command = 16'h8540;
-                27: init_command = 16'h8480;
-                28: init_command = 16'h8300;
-                29: init_command = 16'h8204;
-                30: init_command = 16'h8142;
-                31: init_command = 16'h80DE;
-                32, 33: init_command = 16'hFF00;
+                // Two startup reads flush the chip's unknown power-up state.
+                0, 1: init_command = 16'hFF00;
+
+                // Configure RAM registers 0 through 21 before calibration.
+                2:  init_command = 16'h80DE;
+                3:  init_command = 16'h8142;
+                4:  init_command = 16'h8204;
+                5:  init_command = 16'h8300;
+                6:  init_command = 16'h8480;
+                7:  init_command = 16'h8540;
+                8:  init_command = 16'h8680;
+                9:  init_command = 16'h8700;
+                10: init_command = 16'h8816;
+                11: init_command = 16'h8980;
+                12: init_command = 16'h8A17;
+                13: init_command = 16'h8B80;
+                14: init_command = 16'h8C2C;
+                15: init_command = 16'h8D86;
+                16: init_command = 16'h8EFF;
+                17: init_command = 16'h8FFF;
+                18: init_command = 16'h90FF;
+                19: init_command = 16'h91FF;
+                20: init_command = 16'h92FF;
+                21: init_command = 16'h93FF;
+                22: init_command = 16'h94FF;
+                23: init_command = 16'h95FF;
+
+                // CALIBRATE must be followed by nine clock-generating dummy
+                // commands.  The chip ignores those nine commands.
+                24: init_command = 16'h5500;
+                25, 26, 27, 28, 29, 30, 31, 32, 33: init_command = 16'hFF00;
                 default: init_command = 16'h0000;
             endcase
         end
@@ -57,24 +63,28 @@ module intan_program #(
     function automatic logic [15:0] init_response(input int index);
         begin
             unique case (index)
-                0, 1, 2, 3, 4, 5, 6, 7, 8: init_response = 16'h0004;
-                9: init_response = 16'h0000;
-                10, 11, 12, 13, 14, 15, 16, 17: init_response = 16'hFFFF;
-                18: init_response = 16'hFF86;
-                19: init_response = 16'hFF2C;
-                20: init_response = 16'hFF80;
-                21: init_response = 16'hFF17;
-                22: init_response = 16'hFF80;
-                23: init_response = 16'hFF16;
-                24: init_response = 16'hFF00;
-                25: init_response = 16'hFF80;
-                26: init_response = 16'hFF40;
-                27: init_response = 16'hFF80;
-                28: init_response = 16'hFF00;
-                29: init_response = 16'hFF04;
-                30: init_response = 16'hFF42;
-                31: init_response = 16'hFFDE;
-                32, 33: init_response = 16'h0004;
+                0, 1: init_response = 16'h0004;
+                2: init_response = 16'hFFDE;
+                3: init_response = 16'hFF42;
+                4: init_response = 16'hFF04;
+                5: init_response = 16'hFF00;
+                6: init_response = 16'hFF80;
+                7: init_response = 16'hFF40;
+                8: init_response = 16'hFF80;
+                9: init_response = 16'hFF00;
+                10: init_response = 16'hFF16;
+                11: init_response = 16'hFF80;
+                12: init_response = 16'hFF17;
+                13: init_response = 16'hFF80;
+                14: init_response = 16'hFF2C;
+                15: init_response = 16'hFF86;
+                16, 17, 18, 19, 20, 21, 22, 23: init_response = 16'hFFFF;
+
+                // Register 4 is configured as 0x80, so two's-complement mode
+                // is disabled and calibration status has only its MSB set.
+                // This is also the response produced during the nine ignored
+                // dummy commands following CALIBRATE.
+                24, 25, 26, 27, 28, 29, 30, 31, 32, 33: init_response = 16'h8000;
                 default: init_response = 16'h0000;
             endcase
         end

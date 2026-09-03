@@ -52,14 +52,10 @@ module intan_acq_engine #(
 
     intan_frame_state_t intan_state;
     localparam int CHANNEL_B_OFFSET = config_pkg::INTAN_CHANNELS / 2;
-    localparam int VERIFY_COMMAND_INDEX_WIDTH =
-        (MAX_COMMANDS > 1) ? $clog2(MAX_COMMANDS + 1) : 1;
-    localparam int VERIFY_COMMAND_ADDRESS_WIDTH =
-        (MAX_COMMANDS > 1) ? $clog2(MAX_COMMANDS) : 1;
-    localparam int VERIFY_SENSOR_INDEX_WIDTH =
-        (NUM_INTAN > 1) ? $clog2(NUM_INTAN + 1) : 1;
-    localparam int VERIFY_SENSOR_ADDRESS_WIDTH =
-        (NUM_INTAN > 1) ? $clog2(NUM_INTAN) : 1;
+    localparam int VERIFY_COMMAND_INDEX_WIDTH = (MAX_COMMANDS > 1) ? $clog2(MAX_COMMANDS + 1) : 1;
+    localparam int VERIFY_COMMAND_ADDRESS_WIDTH = (MAX_COMMANDS > 1) ? $clog2(MAX_COMMANDS) : 1;
+    localparam int VERIFY_SENSOR_INDEX_WIDTH = (NUM_INTAN > 1) ? $clog2(NUM_INTAN + 1) : 1;
+    localparam int VERIFY_SENSOR_ADDRESS_WIDTH = (NUM_INTAN > 1) ? $clog2(NUM_INTAN) : 1;
     localparam logic [NUM_INTAN-1:0] INTAN_MASK = config_pkg::INTAN_MASK;
 
     logic [VERIFY_COMMAND_INDEX_WIDTH-1:0] verify_command_index;
@@ -140,10 +136,9 @@ module intan_acq_engine #(
                     if (verify_command_index >= VERIFY_COMMAND_INDEX_WIDTH'(MAX_COMMANDS) ||
                         verify_command_index >= init_list_len) begin
                         intan_state <= ST_VERIFY_DONE;
-                    end else if (verify_sensor_index >=
-                                 VERIFY_SENSOR_INDEX_WIDTH'(NUM_INTAN)) begin
+                    end else if (verify_sensor_index >= VERIFY_SENSOR_INDEX_WIDTH'(NUM_INTAN)) begin
                         verify_command_index <= verify_command_index + 1'b1;
-                        verify_sensor_index <= '0;
+                        verify_sensor_index  <= '0;
                     end else if (!INTAN_MASK[
                                      verify_sensor_index[VERIFY_SENSOR_ADDRESS_WIDTH-1:0]
                                  ]) begin
@@ -232,8 +227,7 @@ module intan_acq_engine #(
                             // sensor_id already filled out in previous state.
                             if (INTAN_MASK[sensor_idx]) begin
                                 for (
-                                    chan_idx = 0; chan_idx < NUM_CHAN;
-                                    chan_idx = chan_idx + 1
+                                    chan_idx = 0; chan_idx < NUM_CHAN; chan_idx = chan_idx + 1
                                 ) begin
                                     Intan_frame.Intan_data[sensor_idx].data[
                                         BITS_PER_WORD*chan_idx+:BITS_PER_WORD

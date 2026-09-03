@@ -12,3 +12,7 @@ vivado*.log
 *.pb
 *.logfile
 *.str
+*.rpt
+*.patch
+deploy/
+*.dwf3work
