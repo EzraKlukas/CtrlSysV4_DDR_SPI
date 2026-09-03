@@ -1,3 +1,4 @@
+# Revision: 2026-09-03-ipdef-only
 # Rebuild the complete Red Pitaya FPGA image from canonical repository sources.
 #
 # This script performs the normal release path:
@@ -140,16 +141,6 @@ proc deployment_sha256 {path} {
     return [lindex [exec {*}$sha_tool $path] 0]
 }
 
-proc deployment_core_ips {expected_vlnv} {
-    set matches {}
-    foreach ip [get_ips -all -quiet] {
-        if {[get_property VLNV $ip] eq $expected_vlnv} {
-            lappend matches $ip
-        }
-    }
-    return $matches
-}
-
 set script_path [file normalize [info script]]
 set script_dir [file dirname $script_path]
 set repo_root [file normalize [file join $script_dir ../..]]
@@ -231,12 +222,10 @@ update_ip_catalog -rebuild
 
 # upgrade_ip also refreshes an instance when the VLNV is unchanged but the
 # packaged core's revision/checksum has changed.
-set candidate_core_ips {}
-foreach ip [get_ips -all -quiet] {
-    if {[string match "user.org:user:ctrlsys_core:*" [get_property VLNV $ip]]} {
-        lappend candidate_core_ips $ip
-    }
-}
+# The generated XCI is named design_1_ctrlsys_core_0_0 in this project.
+# Select by instance name so that get_ips -all cannot feed block-design
+# containers or unrelated Xilinx IP into an unsupported property lookup.
+set candidate_core_ips [get_ips -all -quiet *ctrlsys_core*]
 if {[llength $candidate_core_ips] == 0} {
     error "The project contains no ctrlsys_core IP instance"
 }
@@ -244,13 +233,19 @@ if {[catch {upgrade_ip $candidate_core_ips} upgrade_message]} {
     puts "IP refresh note: $upgrade_message"
 }
 
-set core_ips [deployment_core_ips $expected_vlnv]
-if {[llength $core_ips] == 0} {
-    set actual_vlnvs {}
-    foreach ip $candidate_core_ips {
-        lappend actual_vlnvs [get_property VLNV $ip]
+set core_ips {}
+set actual_ipdefs {}
+foreach ip [get_ips -all -quiet *ctrlsys_core*] {
+    set ipdef [get_property -quiet IPDEF $ip]
+    if {$ipdef ne ""} {
+        lappend actual_ipdefs $ipdef
     }
-    error "Expected $expected_vlnv after refresh; found $actual_vlnvs"
+    if {$ipdef eq $expected_vlnv} {
+        lappend core_ips $ip
+    }
+}
+if {[llength $core_ips] == 0} {
+    error "Expected $expected_vlnv after refresh; found IPDEF values $actual_ipdefs"
 }
 
 foreach core_ip $core_ips {
