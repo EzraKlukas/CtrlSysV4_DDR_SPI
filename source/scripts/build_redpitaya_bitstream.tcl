@@ -1,4 +1,4 @@
-# Revision: 2026-09-03-ipdef-only
+# Revision: 2026-09-03-resume-post-bitstream
 # Rebuild the complete Red Pitaya FPGA image from canonical repository sources.
 #
 # This script performs the normal release path:
@@ -18,6 +18,12 @@
 #       -source source/scripts/build_redpitaya_bitstream.tcl \
 #       -tclargs -jobs 4
 #
+# Resume only the reporting/conversion tail after a completed impl_1 run:
+#
+#   vivado -mode batch \
+#       -source source/scripts/build_redpitaya_bitstream.tcl \
+#       -tclargs -resume_post_bitstream -allow_dirty
+#
 # The output filename is similar to:
 #   build/deploy/ctrlsys-9cc49ebf7d29-z7020-125mhz.bit.bin
 
@@ -34,6 +40,9 @@ proc deployment_usage {} {
     puts "  -ip_version <ver>     ctrlsys_core VLNV version. Default: 1.2"
     puts "  -allow_dirty          Permit a dirty Git worktree and add '-dirty' to names."
     puts "  -skip_repackage       Reuse the existing packaged IP (for debugging only)."
+    puts "  -resume_post_bitstream"
+    puts "                        Reuse a completed impl_1 bitstream and run only"
+    puts "                        timing checks, reports, conversion, and manifest."
     puts "  -help                  Show this message."
 }
 
@@ -51,7 +60,8 @@ proc deployment_parse_args {repo_root} {
         jobs 4 \
         ip_version 1.2 \
         allow_dirty 0 \
-        skip_repackage 0]
+        skip_repackage 0 \
+        resume_post_bitstream 0]
 
     set args $::argv
     while {[llength $args] > 0} {
@@ -69,6 +79,9 @@ proc deployment_parse_args {repo_root} {
             }
             -skip_repackage {
                 set opts(skip_repackage) 1
+            }
+            -resume_post_bitstream {
+                set opts(resume_post_bitstream) 1
             }
             -project -
             -output_dir -
@@ -187,7 +200,11 @@ puts "  IP:         $expected_vlnv"
 puts "  output:     $opts(output_dir)"
 puts ""
 
-if {!$opts(skip_repackage)} {
+if {$opts(resume_post_bitstream)} {
+    puts "STEP 1: Reuse packaged IP (-resume_post_bitstream)"
+    puts "  This mode trusts the existing completed impl_1 result."
+    puts "  Do not use it after changing design sources, constraints, or the block design."
+} elseif {!$opts(skip_repackage)} {
     puts "STEP 1: Repackage ctrlsys_core from source/hdl"
     set vivado [info nameofexecutable]
     set package_command [list \
@@ -210,92 +227,102 @@ if {!$opts(skip_repackage)} {
 
 deployment_require_file [file join $ip_root component.xml] "Packaged component.xml"
 
-puts "STEP 2: Refresh IP catalog and regenerate block-design products"
 open_project $opts(project)
 
-set project [current_project]
-set repo_paths [get_property ip_repo_paths $project]
-if {[lsearch -exact $repo_paths $ip_root] < 0} {
-    set_property ip_repo_paths [linsert $repo_paths 0 $ip_root] $project
-}
-update_ip_catalog -rebuild
+if {!$opts(resume_post_bitstream)} {
+    puts "STEP 2: Refresh IP catalog and regenerate block-design products"
+    set project [current_project]
+    set repo_paths [get_property ip_repo_paths $project]
+    if {[lsearch -exact $repo_paths $ip_root] < 0} {
+        set_property ip_repo_paths [linsert $repo_paths 0 $ip_root] $project
+    }
+    update_ip_catalog -rebuild
 
 # upgrade_ip also refreshes an instance when the VLNV is unchanged but the
 # packaged core's revision/checksum has changed.
 # The generated XCI is named design_1_ctrlsys_core_0_0 in this project.
 # Select by instance name so that get_ips -all cannot feed block-design
 # containers or unrelated Xilinx IP into an unsupported property lookup.
-set candidate_core_ips [get_ips -all -quiet *ctrlsys_core*]
-if {[llength $candidate_core_ips] == 0} {
-    error "The project contains no ctrlsys_core IP instance"
-}
-if {[catch {upgrade_ip $candidate_core_ips} upgrade_message]} {
-    puts "IP refresh note: $upgrade_message"
-}
-
-set core_ips {}
-set actual_ipdefs {}
-foreach ip [get_ips -all -quiet *ctrlsys_core*] {
-    set ipdef [get_property -quiet IPDEF $ip]
-    if {$ipdef ne ""} {
-        lappend actual_ipdefs $ipdef
+    set candidate_core_ips [get_ips -all -quiet *ctrlsys_core*]
+    if {[llength $candidate_core_ips] == 0} {
+        error "The project contains no ctrlsys_core IP instance"
     }
-    if {$ipdef eq $expected_vlnv} {
-        lappend core_ips $ip
+    if {[catch {upgrade_ip $candidate_core_ips} upgrade_message]} {
+        puts "IP refresh note: $upgrade_message"
     }
-}
-if {[llength $core_ips] == 0} {
-    error "Expected $expected_vlnv after refresh; found IPDEF values $actual_ipdefs"
-}
 
-foreach core_ip $core_ips {
-    if {[get_property IS_LOCKED $core_ip]} {
-        error "IP remains locked after refresh: $core_ip"
+    set core_ips {}
+    set actual_ipdefs {}
+    foreach ip [get_ips -all -quiet *ctrlsys_core*] {
+        set ipdef [get_property -quiet IPDEF $ip]
+        if {$ipdef ne ""} {
+            lappend actual_ipdefs $ipdef
+        }
+        if {$ipdef eq $expected_vlnv} {
+            lappend core_ips $ip
+        }
     }
-    catch {reset_target all $core_ip}
-    generate_target all $core_ip
-}
+    if {[llength $core_ips] == 0} {
+        error "Expected $expected_vlnv after refresh; found IPDEF values $actual_ipdefs"
+    }
 
-set bd_files [get_files -all -quiet *.bd]
-if {[llength $bd_files] == 0} {
-    error "The project contains no block design"
-}
-foreach bd_file $bd_files {
+    foreach core_ip $core_ips {
+        if {[get_property IS_LOCKED $core_ip]} {
+            error "IP remains locked after refresh: $core_ip"
+        }
+    }
+
+# Query only block designs directly owned by the top-level source fileset.
+# An all-designs block-design query also returns generated scoped sub-designs;
+# Vivado forbids validating those directly because their parent BD owns them.
+    set source_fileset [get_filesets -quiet sources_1]
+    if {[llength $source_fileset] != 1} {
+        error "Expected exactly one source fileset named sources_1"
+    }
+    set bd_files [get_files -quiet -of_objects $source_fileset *.bd]
+    if {[llength $bd_files] != 1} {
+        error "Expected exactly one top-level block design in sources_1; found: $bd_files"
+    }
+    set bd_file [lindex $bd_files 0]
     open_bd_design $bd_file
     validate_bd_design
     save_bd_design
     generate_target all $bd_file
+
+    update_compile_order -fileset sources_1
+
+    set ip_status_report [file join $opts(output_dir) "${artifact_base}-ip-status.txt"]
+    file delete -force $ip_status_report
+    report_ip_status -file $ip_status_report
+
+    puts "STEP 3: Rebuild ctrlsys_core out-of-context synthesis products"
+    set core_runs [get_runs -quiet *ctrlsys_core*_synth_1]
+    foreach core_run $core_runs {
+        reset_run $core_run
+    }
+    foreach core_run $core_runs {
+        launch_runs $core_run -jobs $opts(jobs)
+    }
+    foreach core_run $core_runs {
+        wait_on_run $core_run
+        deployment_run_complete $core_run
+    }
+
+    puts "STEP 4: Run top-level synthesis"
+    reset_run synth_1
+    launch_runs synth_1 -jobs $opts(jobs)
+    wait_on_run synth_1
+    deployment_run_complete synth_1
+
+    puts "STEP 5: Run implementation and write the bitstream"
+    reset_run impl_1
+    launch_runs impl_1 -to_step write_bitstream -jobs $opts(jobs)
+    wait_on_run impl_1
+    deployment_run_complete impl_1
+} else {
+    puts "STEP 2-5: Reuse completed impl_1 run (-resume_post_bitstream)"
+    deployment_run_complete impl_1
 }
-
-update_compile_order -fileset sources_1
-
-set ip_status_report [file join $opts(output_dir) "${artifact_base}-ip-status.txt"]
-report_ip_status -file $ip_status_report -force
-
-puts "STEP 3: Rebuild ctrlsys_core out-of-context synthesis products"
-set core_runs [get_runs -quiet *ctrlsys_core*_synth_1]
-foreach core_run $core_runs {
-    reset_run $core_run
-}
-foreach core_run $core_runs {
-    launch_runs $core_run -jobs $opts(jobs)
-}
-foreach core_run $core_runs {
-    wait_on_run $core_run
-    deployment_run_complete $core_run
-}
-
-puts "STEP 4: Run top-level synthesis"
-reset_run synth_1
-launch_runs synth_1 -jobs $opts(jobs)
-wait_on_run synth_1
-deployment_run_complete synth_1
-
-puts "STEP 5: Run implementation and write the bitstream"
-reset_run impl_1
-launch_runs impl_1 -to_step write_bitstream -jobs $opts(jobs)
-wait_on_run impl_1
-deployment_run_complete impl_1
 
 set impl_run [get_runs impl_1]
 set impl_dir [get_property DIRECTORY $impl_run]
@@ -307,13 +334,13 @@ puts "STEP 6: Check routed timing and write release reports"
 open_run impl_1
 set timing_report [file join $opts(output_dir) "${artifact_base}-timing.txt"]
 set drc_report [file join $opts(output_dir) "${artifact_base}-drc.txt"]
+file delete -force $timing_report $drc_report
 report_timing_summary \
     -delay_type min_max \
     -report_unconstrained \
     -check_timing_verbose \
-    -file $timing_report \
-    -force
-report_drc -file $drc_report -force
+    -file $timing_report
+report_drc -file $drc_report
 
 set setup_paths [get_timing_paths -quiet -delay_type max -max_paths 1 -nworst 1]
 set hold_paths [get_timing_paths -quiet -delay_type min -max_paths 1 -nworst 1]
