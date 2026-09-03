@@ -727,6 +727,133 @@ static int reset_s2mm_dma(volatile uint32_t *dma) {
   return 0;
 }
 
+static const char *intan_engine_state_name(uint32_t state) {
+  switch (state) {
+  case SENSOR_TEST_INTAN_STATE_PRE_INIT:
+    return "PRE_INIT";
+  case SENSOR_TEST_INTAN_STATE_INITING:
+    return "INITING";
+  case SENSOR_TEST_INTAN_STATE_VERIFY_FETCH:
+    return "VERIFY_FETCH";
+  case SENSOR_TEST_INTAN_STATE_VERIFY_COMPARE:
+    return "VERIFY_COMPARE";
+  case SENSOR_TEST_INTAN_STATE_VERIFY_DONE:
+    return "VERIFY_DONE";
+  case SENSOR_TEST_INTAN_STATE_FAULT:
+    return "FAULT";
+  case SENSOR_TEST_INTAN_STATE_READ_READY:
+    return "READ_READY";
+  case SENSOR_TEST_INTAN_STATE_READING:
+    return "READING";
+  case SENSOR_TEST_INTAN_STATE_DONE:
+    return "DONE";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+static int report_intan_init_diagnostics(volatile uint32_t *core,
+                                         int detailed) {
+  uint32_t words[SENSOR_TEST_CORE_INTAN_DIAGNOSTIC_WORD_COUNT];
+  uint32_t original_control = reg_read(core, CORE_CONTROL);
+  uint32_t status;
+  uint32_t counts;
+  uint32_t first_a;
+  uint32_t first_b;
+  uint32_t state;
+  uint32_t attempt_count;
+  uint32_t a_count;
+  uint32_t b_count;
+  uint64_t a_bitmap;
+  uint64_t b_bitmap;
+  unsigned i;
+
+  reg_write(core, CORE_CONTROL,
+            original_control | SENSOR_TEST_CONTROL_INTAN_DIAGNOSTIC_PAGE);
+  for (i = 0; i < SENSOR_TEST_CORE_INTAN_DIAGNOSTIC_WORD_COUNT; ++i)
+    words[i] = reg_read(core, SENSOR_TEST_CORE_INTAN_DIAGNOSTIC_STATUS +
+                                 i * sizeof(uint32_t));
+  reg_write(core, CORE_CONTROL, original_control);
+
+  status = words[0];
+  counts = words[1];
+  first_a = words[2];
+  first_b = words[4];
+  state = (status & SENSOR_TEST_INTAN_DIAGNOSTIC_STATE_MASK) >>
+          SENSOR_TEST_INTAN_DIAGNOSTIC_STATE_SHIFT;
+  attempt_count = counts & SENSOR_TEST_INTAN_DIAGNOSTIC_ATTEMPT_COUNT_MASK;
+  a_count = (counts & SENSOR_TEST_INTAN_DIAGNOSTIC_A_MISMATCH_COUNT_MASK) >>
+            SENSOR_TEST_INTAN_DIAGNOSTIC_A_MISMATCH_COUNT_SHIFT;
+  b_count = (counts & SENSOR_TEST_INTAN_DIAGNOSTIC_B_MISMATCH_COUNT_MASK) >>
+            SENSOR_TEST_INTAN_DIAGNOSTIC_B_MISMATCH_COUNT_SHIFT;
+  a_bitmap = (uint64_t)words[6] |
+             ((uint64_t)((status &
+                          SENSOR_TEST_INTAN_DIAGNOSTIC_A_BITMAP_HIGH_MASK) >>
+                         SENSOR_TEST_INTAN_DIAGNOSTIC_A_BITMAP_HIGH_SHIFT)
+              << 32);
+  b_bitmap = (uint64_t)words[7] |
+             ((uint64_t)((status &
+                          SENSOR_TEST_INTAN_DIAGNOSTIC_B_BITMAP_HIGH_MASK) >>
+                         SENSOR_TEST_INTAN_DIAGNOSTIC_B_BITMAP_HIGH_SHIFT)
+              << 32);
+
+  if (!detailed) {
+    if (status & SENSOR_TEST_INTAN_DIAGNOSTIC_SNAPSHOT_VALID)
+      fprintf(stderr,
+              "Intan initialization succeeded after retry: attempts=%" PRIu32
+              ", frozen A/B mismatches=%" PRIu32 "/%" PRIu32
+              ", bitmaps=0x%09" PRIx64 "/0x%09" PRIx64 ".\n",
+              attempt_count, a_count, b_count, a_bitmap, b_bitmap);
+    return (status & SENSOR_TEST_INTAN_DIAGNOSTIC_SNAPSHOT_VALID) != 0;
+  }
+
+  fprintf(stderr,
+          "Intan initialization diagnostics: snapshot_valid=%u attempts=%" PRIu32
+          " state=%" PRIu32 " (%s) verify_command=%" PRIu32
+          " verify_sensor=%" PRIu32 " live_error=%u initialized=%u busy=%u\n",
+          !!(status & SENSOR_TEST_INTAN_DIAGNOSTIC_SNAPSHOT_VALID),
+          attempt_count, state, intan_engine_state_name(state),
+          (status & SENSOR_TEST_INTAN_DIAGNOSTIC_COMMAND_INDEX_MASK) >>
+              SENSOR_TEST_INTAN_DIAGNOSTIC_COMMAND_INDEX_SHIFT,
+          (status & SENSOR_TEST_INTAN_DIAGNOSTIC_SENSOR_INDEX_MASK) >>
+              SENSOR_TEST_INTAN_DIAGNOSTIC_SENSOR_INDEX_SHIFT,
+          !!(status & SENSOR_TEST_INTAN_DIAGNOSTIC_LIVE_ERROR),
+          !!(status & SENSOR_TEST_INTAN_DIAGNOSTIC_LIVE_INITIALIZED),
+          !!(status & SENSOR_TEST_INTAN_DIAGNOSTIC_LIVE_BUSY));
+  fprintf(stderr,
+          "  A: mismatch=%u count=%" PRIu32 " bitmap=0x%09" PRIx64
+          " first_valid=%u command=0x%04" PRIx32 " index=%" PRIu32
+          " sensor=%" PRIu32 " actual=0x%04" PRIx32
+          " expected=0x%04" PRIx32 "\n",
+          !!(status & SENSOR_TEST_INTAN_DIAGNOSTIC_A_MISMATCH), a_count,
+          a_bitmap,
+          !!(first_a & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_VALID),
+          first_a & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_COMMAND_MASK,
+          (first_a & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_INDEX_MASK) >>
+              SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_INDEX_SHIFT,
+          (first_a & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_SENSOR_MASK) >>
+              SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_SENSOR_SHIFT,
+          words[3] & SENSOR_TEST_INTAN_DIAGNOSTIC_ACTUAL_MASK,
+          words[3] >> SENSOR_TEST_INTAN_DIAGNOSTIC_EXPECTED_SHIFT);
+  fprintf(stderr,
+          "  B: mismatch=%u count=%" PRIu32 " bitmap=0x%09" PRIx64
+          " first_valid=%u command=0x%04" PRIx32 " index=%" PRIu32
+          " sensor=%" PRIu32 " actual=0x%04" PRIx32
+          " expected=0x%04" PRIx32 "\n",
+          !!(status & SENSOR_TEST_INTAN_DIAGNOSTIC_B_MISMATCH), b_count,
+          b_bitmap,
+          !!(first_b & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_VALID),
+          first_b & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_COMMAND_MASK,
+          (first_b & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_INDEX_MASK) >>
+              SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_INDEX_SHIFT,
+          (first_b & SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_SENSOR_MASK) >>
+              SENSOR_TEST_INTAN_DIAGNOSTIC_METADATA_SENSOR_SHIFT,
+          words[5] & SENSOR_TEST_INTAN_DIAGNOSTIC_ACTUAL_MASK,
+          words[5] >> SENSOR_TEST_INTAN_DIAGNOSTIC_EXPECTED_SHIFT);
+
+  return (status & SENSOR_TEST_INTAN_DIAGNOSTIC_SNAPSHOT_VALID) != 0;
+}
+
 static int reset_configure_core_and_wait_intan(volatile uint32_t *core,
                                                uint32_t sample_period_ticks) {
   uint64_t deadline;
@@ -743,6 +870,7 @@ static int reset_configure_core_and_wait_intan(volatile uint32_t *core,
     status = reg_read(core, CORE_STATUS);
     if (status & STATUS_INTAN_INITIALIZED) {
       /* A failed attempt may have succeeded on automatic retry. */
+      report_intan_init_diagnostics(core, 0);
       if (reg_read(core, CORE_ERROR) & SENSOR_TEST_ERROR_INTAN_INIT)
         reg_write(core, CORE_COMMAND, SENSOR_TEST_COMMAND_CLEAR_ERROR);
       return 0;
@@ -757,6 +885,7 @@ static int reset_configure_core_and_wait_intan(volatile uint32_t *core,
           reg_read(core, CORE_STATUS), reg_read(core, CORE_ERROR),
           reg_read(core, SENSOR_TEST_CORE_MISSED_INTAN),
           reg_read(core, SENSOR_TEST_CORE_MISSED_ICM));
+  report_intan_init_diagnostics(core, 1);
   return -1;
 }
 

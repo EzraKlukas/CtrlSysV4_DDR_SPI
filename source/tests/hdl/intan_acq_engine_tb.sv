@@ -165,6 +165,7 @@ module intan_acq_engine_tb;
         .rst(rst),
         .start_init(start_init),
         .start_read(start_read),
+        .diagnostic_clear(1'b0),
         .timestamp(timestamp),
         .initialized(initialized),
         .Intan_frame(Intan_frame),

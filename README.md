@@ -13,7 +13,7 @@ RHD2164 pins
 AXI4-Lite -> control, status, counters, and debug words only
 ```
 
-`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. The checked-in package contains the updated interface as version 1.2.
+`source/hdl` is the RTL source of truth. Files under `IP/ctrlsys_core/src` are generated package copies and must not be used for lint or simulation. The checked-in package contains the updated design as version 1.2; its external ports and six-bit AXI-Lite address width are unchanged.
 
 ## Production configuration
 
@@ -44,6 +44,10 @@ The 2.5 MHz SCLK is intentionally conservative for initial hardware operation. T
 - `frame_done_pulse`: one `clk` cycle after a complete acquisition frame has already been registered.
 - `busy`: level while an initialization or acquisition command sequence is active.
 - `error`: level after a failed initialization; cleared when a new initialization attempt is accepted.
+
+The acquisition engine also maintains a saturating 16-bit initialization-attempt counter and per-attempt registered A/B mismatch accumulators. Each accumulator contains a saturating 8-bit comparison count, a command-index bitmap, and an independent first-mismatch record. At the final failed-attempt decision, the engine copies the completed accumulators into a sticky published snapshot only when no older snapshot is valid. The copy therefore includes the final comparison and remains coherent and frozen across automatic retries and later success. Core reset or AXI command bit 3 clears the snapshot and attempt counter; a clear during an active attempt does not stall verification, and clear has priority if publication occurs on the same clock.
+
+Only enabled sensors selected by `INTAN_MASK` participate in comparison or diagnostics. The published fields are registered signals propagated through `intan_reader`; AXI-Lite has no direct path to the large live response arrays and no raw-response selection mux.
 
 Reads before initialization and requests while busy are ignored. Failed initialization cannot produce `frame_done_pulse`. `ctrlsys_core` connects only `frame_done_pulse` to `packet_writer`, so initialization cannot enqueue an empty sample frame.
 
@@ -106,22 +110,79 @@ AXI4-Lite is control/status only. Reset leaves acquisition disabled and sets the
 
 | Address | Access | Definition |
 |---:|:---:|---|
-| `0x00` | R/W | control: bit 0 enable, bit 1 synchronous core soft reset, bit 2 route ICM pins to AXI SPI while the hardware reader is idle |
+| `0x00` | R/W | control: bit 0 enable, bit 1 synchronous core soft reset, bit 2 route ICM pins to AXI SPI while the hardware reader is idle, bit 3 select the Intan initialization diagnostic page |
 | `0x04` | R/W | ICM base period in 125 MHz ticks; Intan period is this value divided by 2 |
 | `0x08` | R | missed Intan opportunity count |
-| `0x0c` | W | one-cycle commands: bit 0 clear error latch/mask, bit 1 reset packet/sample count, bit 2 clear packet-done IRQ latch |
+| `0x0c` | W | one-cycle commands: bit 0 clear error latch/mask, bit 1 reset packet/sample count, bit 2 clear packet-done IRQ latch, bit 3 clear Intan diagnostics and attempt count |
 | `0x10` | R | status bitmask described below |
 | `0x14` | R | completed packet count |
 | `0x18` | R | missed ICM opportunity count |
 | `0x1c` | R | sticky error bitmask described below |
-| `0x20` | R | packet-completion debug word 0: prior packet count |
-| `0x24` | R | debug word 1: packet AXI words, 3,072 |
-| `0x28` | R | debug word 2: packet-buffer depth in AXI words |
-| `0x2c` | R | debug word 3: ICM start timestamp low word |
-| `0x30` | R | debug word 4: ICM start timestamp high word |
-| `0x34` | R | debug word 5: ICM done timestamp low word |
-| `0x38` | R | debug word 6: ICM done timestamp high word |
-| `0x3c` | R | debug word 7: packet bytes, 24,576 |
+| `0x20` | R | page 0: packet-completion debug word 0, prior packet count; page 1: Intan diagnostic status |
+| `0x24` | R | page 0: packet AXI words, 3,072; page 1: attempt and mismatch counts |
+| `0x28` | R | page 0: packet-buffer depth in AXI words; page 1: first A mismatch metadata |
+| `0x2c` | R | page 0: ICM start timestamp low word; page 1: first A actual and expected words |
+| `0x30` | R | page 0: ICM start timestamp high word; page 1: first B mismatch metadata |
+| `0x34` | R | page 0: ICM done timestamp low word; page 1: first B actual and expected words |
+| `0x38` | R | page 0: ICM done timestamp high word; page 1: A mismatch bitmap bits 31:0 |
+| `0x3c` | R | page 0: packet bytes, 24,576; page 1: B mismatch bitmap bits 31:0 |
+
+Control bit 3 banks only the eight read-only words at `0x20`–`0x3c`. It does not alter enable, reset, or AXI-SPI routing, and page 0 preserves all legacy meanings above. The diagnostic status word at `0x20` is:
+
+| Bits | Meaning |
+|---:|---|
+| 0 | frozen failure snapshot valid |
+| 1 | frozen snapshot contains at least one A mismatch |
+| 2 | frozen snapshot contains at least one B mismatch |
+| 3 | live Intan error |
+| 4 | live Intan initialized |
+| 5 | live Intan busy |
+| 9:6 | live `intan_acq_engine` state |
+| 16:10 | live verification command index |
+| 19:17 | live verification sensor index |
+| 21:20 | frozen A mismatch bitmap bits 33:32 |
+| 23:22 | frozen B mismatch bitmap bits 33:32 |
+| 31:24 | zero |
+
+The numeric engine-state encoding is stable and software-visible:
+
+| Value | State |
+|---:|---|
+| 0 | `ST_PRE_INIT` |
+| 1 | `ST_INITING` |
+| 2 | `ST_VERIFY_FETCH` |
+| 3 | `ST_VERIFY_COMPARE` |
+| 4 | `ST_VERIFY_DONE` |
+| 5 | `ST_FAULT` |
+| 6 | `ST_READ_READY` |
+| 7 | `ST_READING` |
+| 8 | `ST_DONE` |
+
+The diagnostic count word at `0x24` uses bits 15:0 for the saturating initialization-attempt count, bits 23:16 for the frozen A mismatch count, and bits 31:24 for the frozen B mismatch count. Each mismatch count is the number of failing `(command, enabled sensor)` comparisons for that stream and saturates at 255.
+
+First-mismatch metadata at `0x28` and `0x30` uses bits 15:0 for the associated initialization command word, bits 22:16 for the response/command index, bits 25:23 for the sensor index, bits 30:26 as zero, and bit 31 as valid. The corresponding word at `0x2c` or `0x34` contains the actual captured response in bits 15:0 and the expected response in bits 31:16. Bitmap bit `n` means that at least one enabled sensor mismatched at command index `n`; the low 32 bits are at `0x38`/`0x3c` and bits 33:32 are in diagnostic status.
+
+Example Red Pitaya access:
+
+```bash
+# Select diagnostic page without enabling acquisition
+monitor 0x40000000 0x00000008
+
+monitor 0x40000020
+monitor 0x40000024
+monitor 0x40000028
+monitor 0x4000002c
+monitor 0x40000030
+monitor 0x40000034
+monitor 0x40000038
+monitor 0x4000003c
+
+# Clear diagnostic history
+monitor 0x4000000c 0x00000008
+
+# Restore legacy data-word page
+monitor 0x40000000 0x00000000
+```
 
 Status at `0x10` preserves the original low bits:
 
@@ -194,12 +255,11 @@ gcc -std=c11 -Wall -Wextra -Wpedantic -fsyntax-only source/cpp/redpitaya/*.c
 
 ## Remaining board-integration work
 
-The following steps are deliberately user-owned and have not been run here:
+The checked-in `user.org:user:ctrlsys_core:1.2` package is generated and validated from `source/hdl` by `repackage_ctrlsys_core_ip.tcl`. Remaining steps are deliberately user-owned:
 
-1. Run `repackage_ctrlsys_core_ip.tcl` under licensed Vivado 2026.1 to generate and validate `user.org:user:ctrlsys_core:1.2` from `source/hdl`.
-2. Refresh the IP catalog and upgrade/replace the block-design core instance; reconnect its incompatible 64-bit `m_axis` interface.
-3. Expose and connect the external shared Intan SCLK/MOSI/CS and eight individual MISO nets.
-4. Add board-specific XDC package-pin and electrical constraints; no pin assignments are invented here.
-5. Confirm the block design supplies the same 125 MHz clock to `clk` and AXI-Lite, or address CDC explicitly if that is changed.
-6. Run synthesis, inspect inferred memory/resources, close timing, implement, and generate the bitstream.
-7. Bring up one sensor first, verify physical SPI timing/signal integrity, then expand to all sensors and validate sustained DMA operation.
+1. Refresh the IP catalog and upgrade/replace the block-design core instance; reconnect its incompatible 64-bit `m_axis` interface.
+2. Expose and connect the external shared Intan SCLK/MOSI/CS and eight individual MISO nets.
+3. Add board-specific XDC package-pin and electrical constraints; no pin assignments are invented here.
+4. Confirm the block design supplies the same 125 MHz clock to `clk` and AXI-Lite, or address CDC explicitly if that is changed.
+5. Run synthesis, inspect inferred memory/resources, close timing, implement, and generate the bitstream.
+6. Bring up one sensor first, verify physical SPI timing/signal integrity, then expand to all sensors and validate sustained DMA operation.

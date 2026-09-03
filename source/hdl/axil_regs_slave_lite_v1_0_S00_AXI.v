@@ -16,6 +16,7 @@ module axil_regs_slave_lite_v1_0_S00_AXI #
     output reg         clear_error,
     output reg         reset_sample_counter,
     output reg         cpu_clear_irq,
+    output reg         clear_intan_diagnostics,
     
 
     // FPGA-side status inputs
@@ -39,6 +40,14 @@ module axil_regs_slave_lite_v1_0_S00_AXI #
     input  wire [31:0] data_word5,
     input  wire [31:0] data_word6,
     input  wire [31:0] data_word7,
+    input  wire [31:0] intan_diagnostic_word0,
+    input  wire [31:0] intan_diagnostic_word1,
+    input  wire [31:0] intan_diagnostic_word2,
+    input  wire [31:0] intan_diagnostic_word3,
+    input  wire [31:0] intan_diagnostic_word4,
+    input  wire [31:0] intan_diagnostic_word5,
+    input  wire [31:0] intan_diagnostic_word6,
+    input  wire [31:0] intan_diagnostic_word7,
 
     // AXI4-Lite slave interface
     input  wire                                      S_AXI_ACLK,
@@ -130,11 +139,13 @@ always @(posedge S_AXI_ACLK) begin
         clear_error          <= 1'b0;
         reset_sample_counter <= 1'b0;
         cpu_clear_irq        <= 1'b0;
+        clear_intan_diagnostics <= 1'b0;
     end else begin
         // Command outputs are one-clock pulses.
         clear_error          <= 1'b0;
         reset_sample_counter <= 1'b0;
         cpu_clear_irq        <= 1'b0;
+        clear_intan_diagnostics <= 1'b0;
 
         // Ready for one address and one data beat while no response is pending.
         axi_awready <= (!axi_aw_seen && !axi_bvalid);
@@ -176,6 +187,7 @@ always @(posedge S_AXI_ACLK) begin
                         clear_error          <= axi_wdata[0];
                         reset_sample_counter <= axi_wdata[1];
                         cpu_clear_irq        <= axi_wdata[2];
+                        clear_intan_diagnostics <= axi_wdata[3];
                     end
                 end
 
@@ -234,14 +246,14 @@ assign S_AXI_RDATA =
     (rd_addr_index == 4'h5) ? sample_count :          // 0x14 sample_count
     (rd_addr_index == 4'h6) ? missed_icm_count :      // 0x18 missed ICM reads
     (rd_addr_index == 4'h7) ? error_code :            // 0x1C error_code
-    (rd_addr_index == 4'h8) ? data_word0 :            // 0x20 data_word0
-    (rd_addr_index == 4'h9) ? data_word1 :            // 0x24 data_word1
-    (rd_addr_index == 4'hA) ? data_word2 :            // 0x28 data_word2
-    (rd_addr_index == 4'hB) ? data_word3 :            // 0x2C data_word3
-    (rd_addr_index == 4'hC) ? data_word4 :            // 0x30 data_word4
-    (rd_addr_index == 4'hD) ? data_word5 :            // 0x34 data_word5
-    (rd_addr_index == 4'hE) ? data_word6 :            // 0x38 data_word6
-    (rd_addr_index == 4'hF) ? data_word7 :            // 0x3C data_word7
+    (rd_addr_index == 4'h8) ? (slv_reg0[3] ? intan_diagnostic_word0 : data_word0) :
+    (rd_addr_index == 4'h9) ? (slv_reg0[3] ? intan_diagnostic_word1 : data_word1) :
+    (rd_addr_index == 4'hA) ? (slv_reg0[3] ? intan_diagnostic_word2 : data_word2) :
+    (rd_addr_index == 4'hB) ? (slv_reg0[3] ? intan_diagnostic_word3 : data_word3) :
+    (rd_addr_index == 4'hC) ? (slv_reg0[3] ? intan_diagnostic_word4 : data_word4) :
+    (rd_addr_index == 4'hD) ? (slv_reg0[3] ? intan_diagnostic_word5 : data_word5) :
+    (rd_addr_index == 4'hE) ? (slv_reg0[3] ? intan_diagnostic_word6 : data_word6) :
+    (rd_addr_index == 4'hF) ? (slv_reg0[3] ? intan_diagnostic_word7 : data_word7) :
     32'h00000000;
 
 endmodule

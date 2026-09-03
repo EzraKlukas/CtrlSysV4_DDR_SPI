@@ -9,6 +9,13 @@ module ctrlsys_core_tb;
     localparam logic [31:0] STATUS_INTAN_INITIALIZED = 32'h0000_0100;
     localparam logic [31:0] STATUS_INTAN_INIT_ERROR = 32'h0000_0400;
     localparam logic [31:0] ERROR_INTAN_INIT = 32'h0000_0004;
+    localparam logic [31:0] CONTROL_ENABLE = 32'h0000_0001;
+    localparam logic [31:0] CONTROL_DIAGNOSTIC_PAGE = 32'h0000_0008;
+    localparam logic [31:0] COMMAND_CLEAR_ERROR = 32'h0000_0001;
+    localparam logic [31:0] COMMAND_CLEAR_PACKET_IRQ = 32'h0000_0004;
+    localparam logic [31:0] COMMAND_CLEAR_INTAN_DIAGNOSTICS = 32'h0000_0008;
+    localparam logic [31:0] DIAGNOSTIC_FROZEN_STATUS_MASK = 32'h00f0_0007;
+    localparam logic [31:0] DIAGNOSTIC_FROZEN_STATUS_VALUE = 32'h00f0_0007;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;
@@ -68,6 +75,8 @@ module ctrlsys_core_tb;
     logic [config_pkg::AXIS_DATA_WIDTH-1:0] stalled_data;
     logic [config_pkg::AXIS_BYTES-1:0] stalled_keep;
     logic stalled_last;
+    logic [31:0] frozen_diagnostic[0:7];
+    logic [31:0] legacy_data_words[0:7];
 
     ctrlsys_core dut (
         .clk(clk),
@@ -256,6 +265,7 @@ module ctrlsys_core_tb;
 
     initial begin : test
         logic [31:0] value;
+        logic [31:0] retry_value;
         int waited;
         int trailer;
 
@@ -271,10 +281,80 @@ module ctrlsys_core_tb;
             fail("initialization error was absent from error_code bitmask");
         if (packet_count != 0 || axis_valid) fail("failed initialization produced AXI stream data");
 
+        // Page zero retains the legacy debug window until control bit 3 is set.
+        for (int word_index = 0; word_index < 8; word_index++) begin
+            axil_read(6'(6'h20 + 4 * word_index), value);
+            if (value != 0) fail("legacy data window changed before the first packet");
+        end
+
+        axil_write(6'h00, CONTROL_DIAGNOSTIC_PAGE);
+        axil_read(6'h00, value);
+        if (value != CONTROL_DIAGNOSTIC_PAGE)
+            fail("diagnostic page-select control bit was not persistent");
+        if (dut.axil_enable || dut.axil_soft_reset || dut.axil_use_axi)
+            fail("diagnostic page selection changed an existing control bit");
+
+        for (int word_index = 0; word_index < 8; word_index++)
+            axil_read(6'(6'h20 + 4 * word_index), frozen_diagnostic[word_index]);
+
+        if ((frozen_diagnostic[0] & DIAGNOSTIC_FROZEN_STATUS_MASK) !=
+            DIAGNOSTIC_FROZEN_STATUS_VALUE || frozen_diagnostic[0][31:24] != 0)
+            fail("forced initialization failure was absent from diagnostic status");
+        if (frozen_diagnostic[1][15:0] == 0 || frozen_diagnostic[1][23:16] != 8'd34 ||
+            frozen_diagnostic[1][31:24] != 8'd34)
+            fail("diagnostic attempt or mismatch counts were wrong");
+        if (frozen_diagnostic[2] != 32'h8000_ff00 ||
+            frozen_diagnostic[3] != 32'h0004_0000 ||
+            frozen_diagnostic[4] != 32'h8000_ff00 ||
+            frozen_diagnostic[5] != 32'h0004_0000)
+            fail("first A/B mismatch metadata or response words were wrong");
+        if (frozen_diagnostic[6] != 32'hffff_ffff ||
+            frozen_diagnostic[7] != 32'hffff_ffff)
+            fail("low 32 initialization mismatch bitmap bits were wrong");
+
+        // Keep the model faulted through multiple automatic retries.  Only the
+        // live attempt count may change; every frozen failure field must stay coherent.
+        retry_value = frozen_diagnostic[1];
+        waited = 0;
+        while (retry_value[15:0] < 3 && waited < 100000) begin
+            axil_read(6'h24, retry_value);
+            waited++;
+        end
+        if (retry_value[15:0] < 3)
+            fail("automatic initialization retries did not increment the attempt count");
+        if (retry_value[31:16] != frozen_diagnostic[1][31:16])
+            fail("automatic retry changed frozen mismatch counts");
+        for (int word_index = 2; word_index < 8; word_index++) begin
+            axil_read(6'(6'h20 + 4 * word_index), value);
+            if (value != frozen_diagnostic[word_index])
+                fail("automatic retry tore or overwrote the frozen diagnostic snapshot");
+        end
+
         intan_fault[0] = 1'b0;
         wait_status(STATUS_INTAN_INITIALIZED, STATUS_INTAN_INITIALIZED, 40000);
         $display("Observed successful initialization retry at %0t", $realtime);
-        axil_write(6'h0c, 32'h0000_0001);
+
+        axil_read(6'h20, value);
+        if ((value & 32'h0000_0001) == 0)
+            fail("successful retry overwrote the frozen failure snapshot");
+
+        // Diagnostic clear is independent of all three legacy command pulses.
+        axil_write(6'h0c, COMMAND_CLEAR_INTAN_DIAGNOSTICS);
+        axil_read(6'h1c, value);
+        if ((value & ERROR_INTAN_INIT) == 0)
+            fail("diagnostic clear aliased the legacy clear-error command");
+        axil_read(6'h14, value);
+        if (value != 0) fail("diagnostic clear aliased reset-sample-count");
+        axil_read(6'h10, value);
+        if ((value & STATUS_PACKET_DONE) != 0)
+            fail("packet-done IRQ unexpectedly set before acquisition");
+        axil_read(6'h24, value);
+        if (value != 0) fail("diagnostic clear did not clear counts");
+        axil_read(6'h20, value);
+        if (value[2:0] != 0 || !value[4])
+            fail("diagnostic clear did not clear the snapshot or disturbed initialization");
+
+        axil_write(6'h0c, COMMAND_CLEAR_ERROR);
         wait_status(STATUS_ERROR | STATUS_INTAN_INIT_ERROR, 32'b0, 100);
         axil_read(6'h1c, value);
         if (value != 0) fail("clear_error did not clear the error bitmask");
@@ -284,7 +364,7 @@ module ctrlsys_core_tb;
             fail("initialization while disabled produced a packet");
 
         axil_write(6'h04, config_pkg::ICM_SAMPLE_PERIOD_TICKS_DEFAULT);
-        axil_write(6'h00, 32'h0000_0001);
+        axil_write(6'h00, CONTROL_ENABLE);
 
         waited = 0;
         while (packet_count < 2 && waited < 400000) begin
@@ -337,10 +417,46 @@ module ctrlsys_core_tb;
         axil_read(6'h14, value);
         if (value != 2) fail("AXI-Lite sample counter did not report two packets");
         axil_read(6'h10, value);
-        if (value & STATUS_ERROR) fail("core reported an error during nominal acquisition");
+        if ((value & STATUS_ERROR) != 0)
+            fail("core reported an error during nominal acquisition");
         if ((value & STATUS_PACKET_DONE) == 0)
             fail("packet completion was not visible through AXI-Lite");
-        axil_write(6'h0c, 32'h0000_0004);
+
+        for (int word_index = 0; word_index < 8; word_index++)
+            axil_read(6'(6'h20 + 4 * word_index), legacy_data_words[word_index]);
+        if (legacy_data_words[0] != 1 ||
+            legacy_data_words[1] != config_pkg::PACKET_AXIS_WORDS ||
+            legacy_data_words[2] != config_pkg::PACKET_BUFFER_WORDS ||
+            legacy_data_words[7] != config_pkg::PACKET_BYTES)
+            fail("legacy data-word values or addresses changed");
+
+        // Switch banks while acquisition remains enabled.  This must change
+        // only the read view and must not assert reset or route the ICM pins.
+        axil_write(6'h00, CONTROL_ENABLE | CONTROL_DIAGNOSTIC_PAGE);
+        if (!dut.axil_enable || dut.axil_soft_reset || dut.axil_use_axi)
+            fail("diagnostic page selection disturbed active control bits");
+        for (int word_index = 1; word_index < 8; word_index++) begin
+            axil_read(6'(6'h20 + 4 * word_index), value);
+            if (value != 0) fail("cleared diagnostic page contained stale snapshot data");
+        end
+
+        // With a nonzero sample count and asserted packet IRQ, command bit 3
+        // proves it does not alias either legacy clear pulse.
+        axil_write(6'h0c, COMMAND_CLEAR_INTAN_DIAGNOSTICS);
+        axil_read(6'h14, value);
+        if (value != 2) fail("diagnostic clear reset the sample count");
+        axil_read(6'h10, value);
+        if ((value & STATUS_PACKET_DONE) == 0)
+            fail("diagnostic clear cleared the packet-done IRQ");
+
+        axil_write(6'h00, CONTROL_ENABLE);
+        for (int word_index = 0; word_index < 8; word_index++) begin
+            axil_read(6'(6'h20 + 4 * word_index), value);
+            if (value != legacy_data_words[word_index])
+                fail("returning to page zero did not restore the legacy data-word view");
+        end
+
+        axil_write(6'h0c, COMMAND_CLEAR_PACKET_IRQ);
         wait_status(STATUS_PACKET_DONE, 32'b0, 100);
 
         axil_write(6'h00, 32'b0);

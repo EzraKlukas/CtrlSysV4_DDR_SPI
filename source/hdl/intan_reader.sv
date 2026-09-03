@@ -32,6 +32,7 @@ module intan_reader #(
     // High-level requests from the parent.
     input logic start_init,
     input logic start_read,
+    input logic diagnostic_clear,
     input logic [63:0] timestamp,
     output logic initialized,
 
@@ -51,6 +52,28 @@ module intan_reader #(
     output logic frame_done_pulse,
     output logic busy,
     output logic error,
+
+    output logic [15:0] diagnostic_attempt_count,
+    output logic diagnostic_snapshot_valid,
+    output logic [7:0] diagnostic_a_mismatch_count,
+    output logic [7:0] diagnostic_b_mismatch_count,
+    output logic [MAX_COMMANDS-1:0] diagnostic_a_mismatch_bitmap,
+    output logic [MAX_COMMANDS-1:0] diagnostic_b_mismatch_bitmap,
+    output logic diagnostic_first_a_valid,
+    output logic [6:0] diagnostic_first_a_command_index,
+    output logic [2:0] diagnostic_first_a_sensor_index,
+    output logic [BITS_PER_WORD-1:0] diagnostic_first_a_command,
+    output logic [BITS_PER_WORD-1:0] diagnostic_first_a_actual,
+    output logic [BITS_PER_WORD-1:0] diagnostic_first_a_expected,
+    output logic diagnostic_first_b_valid,
+    output logic [6:0] diagnostic_first_b_command_index,
+    output logic [2:0] diagnostic_first_b_sensor_index,
+    output logic [BITS_PER_WORD-1:0] diagnostic_first_b_command,
+    output logic [BITS_PER_WORD-1:0] diagnostic_first_b_actual,
+    output logic [BITS_PER_WORD-1:0] diagnostic_first_b_expected,
+    output logic [3:0] diagnostic_state,
+    output logic [6:0] diagnostic_verify_command_index,
+    output logic [2:0] diagnostic_verify_sensor_index,
 
     // Physical RHD2164 bus.  SCLK, MOSI, and CS are shared; each chip has a
     // separate MISO return line.
@@ -85,6 +108,7 @@ module intan_reader #(
         .rst(rst),
         .start_init(start_init),
         .start_read(start_read),
+        .diagnostic_clear(diagnostic_clear),
         .timestamp(timestamp),
         .initialized(initialized),
         .Intan_frame(intan_frame),
@@ -108,7 +132,28 @@ module intan_reader #(
         .init_done_pulse(init_done_pulse),
         .frame_done_pulse(frame_done_pulse),
         .busy(busy),
-        .err(error)
+        .err(error),
+        .diagnostic_attempt_count(diagnostic_attempt_count),
+        .diagnostic_snapshot_valid(diagnostic_snapshot_valid),
+        .diagnostic_a_mismatch_count(diagnostic_a_mismatch_count),
+        .diagnostic_b_mismatch_count(diagnostic_b_mismatch_count),
+        .diagnostic_a_mismatch_bitmap(diagnostic_a_mismatch_bitmap),
+        .diagnostic_b_mismatch_bitmap(diagnostic_b_mismatch_bitmap),
+        .diagnostic_first_a_valid(diagnostic_first_a_valid),
+        .diagnostic_first_a_command_index(diagnostic_first_a_command_index),
+        .diagnostic_first_a_sensor_index(diagnostic_first_a_sensor_index),
+        .diagnostic_first_a_command(diagnostic_first_a_command),
+        .diagnostic_first_a_actual(diagnostic_first_a_actual),
+        .diagnostic_first_a_expected(diagnostic_first_a_expected),
+        .diagnostic_first_b_valid(diagnostic_first_b_valid),
+        .diagnostic_first_b_command_index(diagnostic_first_b_command_index),
+        .diagnostic_first_b_sensor_index(diagnostic_first_b_sensor_index),
+        .diagnostic_first_b_command(diagnostic_first_b_command),
+        .diagnostic_first_b_actual(diagnostic_first_b_actual),
+        .diagnostic_first_b_expected(diagnostic_first_b_expected),
+        .diagnostic_state(diagnostic_state),
+        .diagnostic_verify_command_index(diagnostic_verify_command_index),
+        .diagnostic_verify_sensor_index(diagnostic_verify_sensor_index)
     );
 
     intan_cmd_sequencer #(

@@ -16,6 +16,7 @@ module axil_regs #
     output wire        clear_error,
     output wire        reset_sample_counter,
     output wire        cpu_clear_irq,
+    output wire        clear_intan_diagnostics,
 
     // FPGA-side status inputs
     input  wire        busy,
@@ -38,6 +39,14 @@ module axil_regs #
     input  wire [31:0] data_word5,
     input  wire [31:0] data_word6,
     input  wire [31:0] data_word7,
+    input  wire [31:0] intan_diagnostic_word0,
+    input  wire [31:0] intan_diagnostic_word1,
+    input  wire [31:0] intan_diagnostic_word2,
+    input  wire [31:0] intan_diagnostic_word3,
+    input  wire [31:0] intan_diagnostic_word4,
+    input  wire [31:0] intan_diagnostic_word5,
+    input  wire [31:0] intan_diagnostic_word6,
+    input  wire [31:0] intan_diagnostic_word7,
 
     // AXI4-Lite slave interface
     input  wire                                      s00_axi_aclk,
@@ -102,6 +111,7 @@ axil_regs_slave_lite_v1_0_S00_AXI #(
     .clear_error          (clear_error),
     .reset_sample_counter (reset_sample_counter),
     .cpu_clear_irq        (cpu_clear_irq),
+    .clear_intan_diagnostics(clear_intan_diagnostics),
 
     .busy                 (busy),
     .error                (error),
@@ -121,7 +131,15 @@ axil_regs_slave_lite_v1_0_S00_AXI #(
     .data_word4           (data_word4),
     .data_word5           (data_word5),
     .data_word6           (data_word6),
-    .data_word7           (data_word7)
+    .data_word7           (data_word7),
+    .intan_diagnostic_word0(intan_diagnostic_word0),
+    .intan_diagnostic_word1(intan_diagnostic_word1),
+    .intan_diagnostic_word2(intan_diagnostic_word2),
+    .intan_diagnostic_word3(intan_diagnostic_word3),
+    .intan_diagnostic_word4(intan_diagnostic_word4),
+    .intan_diagnostic_word5(intan_diagnostic_word5),
+    .intan_diagnostic_word6(intan_diagnostic_word6),
+    .intan_diagnostic_word7(intan_diagnostic_word7)
 );
 
 endmodule

@@ -136,6 +136,7 @@ module ctrlsys_core (
     logic axil_clear_error;
     logic axil_reset_sample_counter;
     logic axil_cpu_clear_irq;
+    logic axil_clear_intan_diagnostics;
     logic packet_done_irq;
     logic error_latched;
     logic [31:0] sample_count;
@@ -154,6 +155,36 @@ module ctrlsys_core (
     logic [31:0] data_word5;
     logic [31:0] data_word6;
     logic [31:0] data_word7;
+
+    logic [15:0] intan_diagnostic_attempt_count;
+    logic intan_diagnostic_snapshot_valid;
+    logic [7:0] intan_diagnostic_a_mismatch_count;
+    logic [7:0] intan_diagnostic_b_mismatch_count;
+    logic [MAX_COMMANDS-1:0] intan_diagnostic_a_mismatch_bitmap;
+    logic [MAX_COMMANDS-1:0] intan_diagnostic_b_mismatch_bitmap;
+    logic intan_diagnostic_first_a_valid;
+    logic [6:0] intan_diagnostic_first_a_command_index;
+    logic [2:0] intan_diagnostic_first_a_sensor_index;
+    logic [INTAN_BITS_PER_WORD-1:0] intan_diagnostic_first_a_command;
+    logic [INTAN_BITS_PER_WORD-1:0] intan_diagnostic_first_a_actual;
+    logic [INTAN_BITS_PER_WORD-1:0] intan_diagnostic_first_a_expected;
+    logic intan_diagnostic_first_b_valid;
+    logic [6:0] intan_diagnostic_first_b_command_index;
+    logic [2:0] intan_diagnostic_first_b_sensor_index;
+    logic [INTAN_BITS_PER_WORD-1:0] intan_diagnostic_first_b_command;
+    logic [INTAN_BITS_PER_WORD-1:0] intan_diagnostic_first_b_actual;
+    logic [INTAN_BITS_PER_WORD-1:0] intan_diagnostic_first_b_expected;
+    logic [3:0] intan_diagnostic_state;
+    logic [6:0] intan_diagnostic_verify_command_index;
+    logic [2:0] intan_diagnostic_verify_sensor_index;
+    logic [31:0] intan_diagnostic_word0;
+    logic [31:0] intan_diagnostic_word1;
+    logic [31:0] intan_diagnostic_word2;
+    logic [31:0] intan_diagnostic_word3;
+    logic [31:0] intan_diagnostic_word4;
+    logic [31:0] intan_diagnostic_word5;
+    logic [31:0] intan_diagnostic_word6;
+    logic [31:0] intan_diagnostic_word7;
 
     (* ASYNC_REG = "TRUE" *) logic rst_meta;
     (* ASYNC_REG = "TRUE" *) logic rst_sync;
@@ -196,6 +227,49 @@ module ctrlsys_core (
         (error_intan ? ERR_INTAN_INIT : 32'b0) |
         ((missed_intan_count != missed_intan_count_d) ? ERR_MISSED_INTAN : 32'b0) |
         ((missed_icm_count != missed_icm_count_d) ? ERR_MISSED_ICM : 32'b0);
+    assign intan_diagnostic_word0 = {
+        8'b0,
+        intan_diagnostic_b_mismatch_bitmap[33:32],
+        intan_diagnostic_a_mismatch_bitmap[33:32],
+        intan_diagnostic_verify_sensor_index,
+        intan_diagnostic_verify_command_index,
+        intan_diagnostic_state,
+        intan_busy,
+        intan_initialized,
+        error_intan,
+        intan_diagnostic_first_b_valid,
+        intan_diagnostic_first_a_valid,
+        intan_diagnostic_snapshot_valid
+    };
+    assign intan_diagnostic_word1 = {
+        intan_diagnostic_b_mismatch_count,
+        intan_diagnostic_a_mismatch_count,
+        intan_diagnostic_attempt_count
+    };
+    assign intan_diagnostic_word2 = {
+        intan_diagnostic_first_a_valid,
+        5'b0,
+        intan_diagnostic_first_a_sensor_index,
+        intan_diagnostic_first_a_command_index,
+        intan_diagnostic_first_a_command
+    };
+    assign intan_diagnostic_word3 = {
+        intan_diagnostic_first_a_expected,
+        intan_diagnostic_first_a_actual
+    };
+    assign intan_diagnostic_word4 = {
+        intan_diagnostic_first_b_valid,
+        5'b0,
+        intan_diagnostic_first_b_sensor_index,
+        intan_diagnostic_first_b_command_index,
+        intan_diagnostic_first_b_command
+    };
+    assign intan_diagnostic_word5 = {
+        intan_diagnostic_first_b_expected,
+        intan_diagnostic_first_b_actual
+    };
+    assign intan_diagnostic_word6 = intan_diagnostic_a_mismatch_bitmap[31:0];
+    assign intan_diagnostic_word7 = intan_diagnostic_b_mismatch_bitmap[31:0];
 
     axil_regs u_axil_regs (
         .enable(axil_enable),
@@ -205,6 +279,7 @@ module ctrlsys_core (
         .clear_error(axil_clear_error),
         .reset_sample_counter(axil_reset_sample_counter),
         .cpu_clear_irq(axil_cpu_clear_irq),
+        .clear_intan_diagnostics(axil_clear_intan_diagnostics),
         .busy(spi_busy || intan_busy),
         .error(error_latched),
         .read_in_progress(spi_busy || intan_busy),
@@ -223,6 +298,14 @@ module ctrlsys_core (
         .data_word5(data_word5),
         .data_word6(data_word6),
         .data_word7(data_word7),
+        .intan_diagnostic_word0(intan_diagnostic_word0),
+        .intan_diagnostic_word1(intan_diagnostic_word1),
+        .intan_diagnostic_word2(intan_diagnostic_word2),
+        .intan_diagnostic_word3(intan_diagnostic_word3),
+        .intan_diagnostic_word4(intan_diagnostic_word4),
+        .intan_diagnostic_word5(intan_diagnostic_word5),
+        .intan_diagnostic_word6(intan_diagnostic_word6),
+        .intan_diagnostic_word7(intan_diagnostic_word7),
         .s00_axi_aclk(s00_axi_aclk),
         .s00_axi_aresetn(s00_axi_aresetn),
         .s00_axi_awaddr(s00_axi_awaddr),
@@ -312,6 +395,7 @@ module ctrlsys_core (
         .rst(core_rst),
         .start_init(start_init_intan),
         .start_read(start_read_intan),
+        .diagnostic_clear(axil_clear_intan_diagnostics),
         .timestamp(timestamp),
         .initialized(intan_initialized),
         .init_list_len(init_list_len),
@@ -325,6 +409,27 @@ module ctrlsys_core (
         .frame_done_pulse(frame_done_pulse_intan),
         .busy(intan_busy),
         .error(error_intan),
+        .diagnostic_attempt_count(intan_diagnostic_attempt_count),
+        .diagnostic_snapshot_valid(intan_diagnostic_snapshot_valid),
+        .diagnostic_a_mismatch_count(intan_diagnostic_a_mismatch_count),
+        .diagnostic_b_mismatch_count(intan_diagnostic_b_mismatch_count),
+        .diagnostic_a_mismatch_bitmap(intan_diagnostic_a_mismatch_bitmap),
+        .diagnostic_b_mismatch_bitmap(intan_diagnostic_b_mismatch_bitmap),
+        .diagnostic_first_a_valid(intan_diagnostic_first_a_valid),
+        .diagnostic_first_a_command_index(intan_diagnostic_first_a_command_index),
+        .diagnostic_first_a_sensor_index(intan_diagnostic_first_a_sensor_index),
+        .diagnostic_first_a_command(intan_diagnostic_first_a_command),
+        .diagnostic_first_a_actual(intan_diagnostic_first_a_actual),
+        .diagnostic_first_a_expected(intan_diagnostic_first_a_expected),
+        .diagnostic_first_b_valid(intan_diagnostic_first_b_valid),
+        .diagnostic_first_b_command_index(intan_diagnostic_first_b_command_index),
+        .diagnostic_first_b_sensor_index(intan_diagnostic_first_b_sensor_index),
+        .diagnostic_first_b_command(intan_diagnostic_first_b_command),
+        .diagnostic_first_b_actual(intan_diagnostic_first_b_actual),
+        .diagnostic_first_b_expected(intan_diagnostic_first_b_expected),
+        .diagnostic_state(intan_diagnostic_state),
+        .diagnostic_verify_command_index(intan_diagnostic_verify_command_index),
+        .diagnostic_verify_sensor_index(intan_diagnostic_verify_sensor_index),
         .intan_sclk(intan_sclk),
         .intan_mosi(intan_mosi),
         .intan_cs_n(intan_cs_n),
