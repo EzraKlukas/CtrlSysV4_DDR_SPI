@@ -281,48 +281,59 @@ def split_item_by_word(item: LayoutItem, axis_bytes: int) -> Iterable[Tuple[int,
 
 
 def render_svg(items: List[LayoutItem], total_bytes: int, axis_bytes: int) -> str:
-    word_count = total_bytes // axis_bytes
-    lane_px = 8
-    row_h = 26
-    label_w = 112
-    top_h = 28
-    width = label_w + axis_bytes * lane_px + 24
-    height = top_h + word_count * row_h + 28
+    word_count = math.ceil(total_bytes / axis_bytes)
+    lane_px = max(2, min(8, 1024 // axis_bytes))
+    word_w = axis_bytes * lane_px
+    column_w = word_w + 16
+    words_per_row = max(1, min(word_count, 1024 // column_w))
+    row_h = 42
+    top_h = 36
+    width = words_per_row * column_w + 16
+    height = top_h + math.ceil(word_count / words_per_row) * row_h + 12
+
+    def word_position(word: int) -> Tuple[int, int]:
+        return (
+            16 + (word % words_per_row) * column_w,
+            top_h + (word // words_per_row) * row_h,
+        )
 
     parts = [
-        f'<svg class="packet-map" viewBox="0 0 {width} {height}" role="img" '
+        f'<svg class="packet-map" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" '
         f'aria-label="Packet layout with {word_count} AXI words">'
     ]
-    parts.append(f'<text class="axis-label" x="{label_w}" y="18">128 byte AXI words</text>')
+    parts.append(f'<text class="axis-label" x="16" y="18">{axis_bytes} byte AXI words</text>')
 
     for word in range(word_count):
-        y = top_h + word * row_h
-        parts.append(f'<text class="word-label" x="8" y="{y + 17}">word {word}</text>')
+        x, y = word_position(word)
+        parts.append(f'<text class="word-label" x="{x}" y="{y - 4}">word {word}</text>')
         parts.append(
-            f'<rect class="word-bg" x="{label_w}" y="{y}" '
-            f'width="{axis_bytes * lane_px}" height="{row_h - 4}" />'
+            f'<rect class="word-bg" x="{x}" y="{y}" '
+            f'width="{word_w}" height="22" />'
         )
         for lane in range(0, axis_bytes + 1, 16):
-            x = label_w + lane * lane_px
+            lane_x = x + lane * lane_px
             parts.append(
-                f'<line class="lane-line" x1="{x}" y1="{y}" x2="{x}" y2="{y + row_h - 4}" />'
+                f'<line class="lane-line" x1="{lane_x}" y1="{y}" x2="{lane_x}" y2="{y + 22}" />'
             )
 
     for item in items:
         for word, lane, span in split_item_by_word(item, axis_bytes):
-            y = top_h + word * row_h + 3
-            x = label_w + lane * lane_px
+            x, y = word_position(word)
+            x += lane * lane_px
+            y += 3
             title = html.escape(
                 f"{item.name}: {byte_range_text(item.start, item.size, axis_bytes)}"
             )
             parts.append(
                 f'<rect class="item {item.kind}" x="{x}" y="{y}" '
-                f'width="{span * lane_px}" height="{row_h - 10}" '
+                f'width="{span * lane_px}" height="16" '
                 f'fill="{color_for(item)}">'
                 f"<title>{title}</title></rect>"
             )
-            if span * lane_px > 48 and item.kind != "padding":
-                label = html.escape(item.name.replace("Intan frame ", "I"))
+            label_text = item.name.replace("Intan frame ", "I")
+            if span * lane_px >= len(label_text) * 7 + 8 and item.kind != "padding":
+                label = html.escape(label_text)
                 parts.append(
                     f'<text class="item-label" x="{x + 4}" y="{y + 13}">{label}</text>'
                 )
@@ -366,7 +377,7 @@ def render_html(
     total_bytes: int,
     axis_bytes: int,
 ) -> str:
-    total_words = total_bytes // axis_bytes
+    total_words = math.ceil(total_bytes / axis_bytes)
     logical_bytes = header_bytes + icm_frame_bytes + (
         constants["INTAN_SAMPLING_RATIO"] * intan_frame_bytes
     )
@@ -434,11 +445,12 @@ h1 {{
 }}
 .grid {{
     display: grid;
-    grid-template-columns: minmax(280px, 380px) 1fr;
+    grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
     gap: 18px;
     align-items: start;
 }}
 section {{
+    min-width: 0;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -460,14 +472,17 @@ th, td {{
 th {{
     font-weight: 650;
 }}
+.summary th, .summary td {{
+    white-space: normal;
+    overflow-wrap: anywhere;
+}}
 .summary th {{
     width: 48%;
     color: var(--muted);
 }}
 .packet-map {{
-    min-width: 1160px;
-    width: 100%;
-    height: auto;
+    display: block;
+    max-width: none;
 }}
 .axis-label {{
     fill: var(--muted);
@@ -702,7 +717,7 @@ def main() -> None:
     print(f"wrote {output_path}")
     print(f"layout={args.layout}")
     print(f"packet_bytes={total_bytes}")
-    print(f"axis_words={total_bytes // axis_bytes}")
+    print(f"axis_words={math.ceil(total_bytes / axis_bytes)}")
     print(f"axis_bytes={axis_bytes}")
 
 
