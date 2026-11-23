@@ -1,95 +1,42 @@
-# Red Pitaya single-sensor test
+# Red Pitaya bring-up
 
-The single-sensor utility below is the legacy ICM bring-up path. For the
-combined production stream, `intan8_icm4_dma_interrupt_test` uses a fixed
-24,576-byte packet containing real 1,048-byte RHD2164 frames plus the 100-byte
-ICM frame. Its interrupt loop initializes the core once, waits for Intan
-initialization, arms S2MM, enables acquisition once, and re-arms DMA after each
-completion without resetting or reinitializing the core. See the repository
-root README for the packet layout and AXI-Lite register map.
+Start with the working bitstream supplied with the board and a checkout of the matching host tools. These steps are for the combined CtrlSys image described in the [capstone handoff](../../../README.md). The image uses 24,576-byte DMA packets and expects the CtrlSys registers at `0x40000000`, AXI DMA at `0x40400000`, and AXI Quad SPI at `0x41e00000`.
 
-This program tests one acquisition through both the CtrlSys AXI-Lite registers
-and the AXI DMA S2MM path. It expects the current block-design addresses:
+## Board-only DMA check
 
-- CtrlSys core: `0x40000000`
-- AXI DMA: `0x40400000`
-- AXI Quad SPI: `0x41e00000`
-- One streamed frame: 36 bytes
-
-The DMA needs memory that is physically contiguous and unavailable to normal
-Linux allocation. The default is `/dev/udmabuf0`; do not substitute a normal
-`malloc` address.
-
-Build and run as root:
+From the repository checkout on the Red Pitaya, build the combined test.
 
 ```sh
-make
-sudo ./single_sensor_test
+make -C source/cpp/redpitaya intan8_icm4_dma_interrupt_test
 ```
 
-To test the sensor through AXI-Lite without configuring DMA or reserving RAM:
+The test needs root access for the hardware mappings, a Linux userspace I/O (UIO) device for DMA completion interrupts, and a DMA buffer. It defaults to `/dev/uio/api` and `/dev/udmabuf0`. If the UIO device is missing, check the board image and the [device-tree overlay source](../../redpitaya/dma_irq_uio_overlay.dts). Use `--uio` if the DMA interrupt device has a different path.
+
+With the connected sensors and the supplied image, capture ten packets with TCP disabled.
 
 ```sh
-sudo ./single_sensor_test --no-dma
+sudo ./source/cpp/redpitaya/intan8_icm4_dma_interrupt_test --count 10 --no-tcp --quiet
 ```
 
-This waits for one SPI acquisition and reads the 20 sensor bytes from the
-core's `data_word3` through `data_word7` registers. The completed-read
-timestamp is not exposed in the AXI-Lite snapshot; it is present in the DMA
-frame.
+If the board uses a different u-dma-buf device, pass `--udmabuf` with its path. On a board set up for reserved Deep Memory Mode, run `monitor -r` and pass the reported reserved-memory base with `--phys`. The program checks the address against the board's memory map before arming DMA.
 
-Before either test, the program uses AXI Quad SPI to select user bank 0 and
-report the ICM-20948 `WHO_AM_I` value (normally `0xEA`). An unexpected value
-produces a warning but does not stop the test. The program then resets and
-wakes the device, disables its host I2C interface, and enables its
-accelerometer and gyroscope.
-The final six bytes of the 20-byte burst are external-sensor-data registers;
-the program configures the ICM-20948 auxiliary I2C master to keep the internal
-AK09916 magnetometer's `HXL` through `HZH` registers in those bytes.
+The program configures the ICM, waits for Intan initialization, then enables acquisition. The short run exits successfully after receiving and validating ten packets. If it reports an Intan initialization timeout, save the diagnostic output and check the enabled MISO line against the [board constraints](../../constraints/CtrlSysV4.xdc). The [register map](../../../docs/acquisition-reference.md#axi4-lite-register-map) explains how to read the captured command index and response mismatch. If initialization succeeds but no packets arrive, check the DMA completion interrupt and UIO mapping.
 
-To select another u-dma-buf device:
+## Desktop TCP check
+
+On the Red Pitaya, repeat the test with TCP enabled. Include the same buffer and UIO options you used above. The board waits for a client on port 5000 before starting acquisition.
 
 ```sh
-sudo ./single_sensor_test --udmabuf /dev/udmabuf1
+sudo ./source/cpp/redpitaya/intan8_icm4_dma_interrupt_test --count 100 --quiet
 ```
 
-If u-dma-buf is unavailable on a Red Pitaya image, first check the board's
-existing Deep Memory Mode reserved region:
+On the desktop, run the receiver from the repository root, substituting the board's hostname or IP address for `BOARD_HOST`.
 
 ```sh
-monitor -r
+python3 source/python/redpitaya_dma_receiver.py BOARD_HOST \
+  --count 100 --quiet --print-trailer --csv capstone-baseline.csv
 ```
 
-For the default 32 MiB region this reports a start address of `0x1000000`.
-Use that address with `--phys`:
+Check that the trailer validates, the packet sequence progresses, and the trailer's dropped-frame counts stay at zero. At the default cadence there is usually one ICM frame and two Intan frames per packet. The checked-in FPGA configuration fills the Intan sensor-0 slot from hardware and leaves the other sample slots zeroed. The receiver's `--print-sensor-data` option can display decoded samples. The CSV records desktop arrival times and ICM timestamps for comparing delivery with the FPGA's packet cadence.
 
-```sh
-sudo ./single_sensor_test --phys 0x1000000
-```
-
-The program accepts a `--phys` address that is either outside `/proc/iomem`
-System RAM or inside the Red Pitaya `monitor -r` reserved memory range.
-
-As another bring-up option, reserve the top 16 MiB of the 512 MiB DDR by
-changing the kernel boot argument from `mem=512M` to `mem=496M`, then reboot.
-Confirm that Linux no longer owns that region:
-
-```sh
-cat /proc/cmdline
-grep "System RAM" /proc/iomem
-```
-
-The command line must contain `mem=496M`, and System RAM must end at
-`0x1effffff`. The test can then use the first address above Linux RAM:
-
-```sh
-sudo ./single_sensor_test --phys 0x1f000000
-```
-
-The program refuses a `--phys` address that still overlaps a System RAM range
-unless Red Pitaya's `monitor -r` reports that address as reserved.
-
-The program resets the core and DMA, arms one 36-byte S2MM transfer, performs
-one SPI burst read beginning at ICM-20948 register `0x2D`, stops acquisition,
-prints the timestamps and 20 sensor bytes, and verifies that the DMA data
-matches the core's AXI-Lite snapshot.
+The older `single_sensor_test` and `dma_interrupt_test` utilities target a legacy 36-byte ICM frame. Use the combined test above with the supplied CtrlSys image.
